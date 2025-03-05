@@ -1,0 +1,22 @@
+---
+title: "stuff-plus"
+author: "Bryan Mui - UID 506021334"
+date: "2025-03-05"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r packages, include=FALSE}
+library(tidyverse)
+```
+
+
+```{r}
+data <- read_csv("./data/UCLA_2023-2024.csv")
+head(data)
+```
+
