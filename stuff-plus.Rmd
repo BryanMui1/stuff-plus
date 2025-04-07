@@ -14,9 +14,180 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 ```
 
+# Reading the data
 
 ```{r}
-data <- read_csv("./data/UCLA_2023-2024.csv")
+data <- read_csv("./data/UCLA2023-2024.csv")
 head(data)
+```
+
+
+# Outputting the columns
+
+```{r}
+colnames(data)
+```
+
+Chatgpt predictor ideas:
+
+Velocity:
+
+    * RelSpeed (Release Speed)
+    * ZoneSpeed (Speed at the plate)
+    * EffectiveVelo (Velocity adjusted for approach angle)
+
+Movement:
+
+    * VertBreak (Vertical movement due to spin)
+    * InducedVertBreak (More refined vertical movement measurement)
+    * HorzBreak (Horizontal movement due to spin)
+    * pfxx (Horizontal movement component)
+    * pfxz (Vertical movement component)
+
+Spin:
+
+    * SpinRate (Total revolutions per minute)
+    * SpinAxis (2D spin direction)
+    * SpinAxis3dTransverseAngle (3D spin components)
+    * SpinAxis3dLongitudinalAngle
+    * SpinAxis3dActiveSpinRate
+    * SpinAxis3dSpinEfficiency
+
+Release & Extension:
+
+    * RelHeight (Height of release)
+    * RelSide (Side angle of release)
+    * Extension (How far forward the pitcher releases the ball)
+
+Pitch Type & Classification:
+
+    * TaggedPitchType (Human-classified pitch type)
+    * AutoPitchType (Algorithm-classified pitch type)
+
+Location & Trajectory (Optional, but can improve Stuff+ models):
+
+    * PlateLocHeight (Height of the pitch as it crosses the plate)
+    * PlateLocSide (Side location at home plate)
+    * VertApprAngle (Vertical approach angle)
+    * HorzApprAngle (Horizontal approach angle)
+    
+# Add Swinging Strikes
+
+```{r}
+# Calculate swinging strike percentage
+# not good, same reward value for every pitch
+# Idea: calculate average/aggregate for every single predictor(for every pitcher)
+data_mutate <- data %>%
+  group_by(PitcherId, TaggedPitchType) %>%
+  mutate(
+    total_pitches = n(),
+    swinging_strikes = sum(PitchCall == "StrikeSwinging"),
+    swstr_percent = (swinging_strikes / total_pitches) * 100,
+    .groups = 'drop'
+  )
+```
+
+    
+    
+# Stuff + 
+
+```{r}
+# Select the variables we need
+stuff_data <- data_mutate %>%
+  select(c(
+    "Pitcher",
+    "PitcherId",
+    "TaggedPitchType",
+    "RelSpeed",
+    "ZoneSpeed",
+    "EffectiveVelo",
+    "VertBreak",
+    "InducedVertBreak",
+    "HorzBreak",
+    "pfxx",
+    "pfxz",
+    "SpinRate",
+    "SpinAxis",
+    "RelHeight",
+    "RelSide",
+    "Extension",
+    "PlateLocHeight",
+    "PlateLocSide",
+    "VertApprAngle",
+    "HorzApprAngle",
+    "total_pitches",
+    "swinging_strikes",
+    "swstr_percent")) %>%
+  mutate(TaggedPitchType = as.factor(TaggedPitchType))
+head(stuff_data)
+```
+
+```{r}
+# Calculate team-wide SD and mean for metrics
+# means <- stuff_data %>%
+#   group_by("TaggedPitchType") %>%
+#   summarise_all(funs(mean), na.rm = TRUE)
+# means
+# 
+# sds <- stuff_data %>%
+#   group_by("TaggedPitchType") %>%
+#   summarise_all(funs(sd), na.rm = TRUE)
+# means
+```
+
+```{r}
+stuff_data_standardized <- stuff_data %>%
+  group_by("TaggedPitchType") %>%
+  mutate_at(vars(RelSpeed:swstr_percent), scale) %>%
+  drop_na()
+
+stuff_data_standardized
+```
+
+
+# Training a Linear Regression Model
+
+```{r}
+model <- lm(swstr_percent ~ RelSpeed + ZoneSpeed + EffectiveVelo +
+            VertBreak + InducedVertBreak + HorzBreak +
+            pfxx + pfxz + SpinRate + SpinAxis +
+            RelHeight + RelSide + Extension +
+            PlateLocHeight + PlateLocSide +
+            VertApprAngle + HorzApprAngle,
+            data = stuff_data_standardized)
+
+summary(model)
+model$coefficients
+```
+
+
+```{r}
+# Calculate Stuff+
+coefficients <- coef(model)
+
+
+
+stuff_plus_calc <- stuff_data_standardized %>%
+    rowwise() %>%
+    mutate(stuff_plus = coefficients["(Intercept)"] +
+                      coefficients["RelSpeed"] * RelSpeed +
+                      coefficients["ZoneSpeed"] * ZoneSpeed +
+                      coefficients["EffectiveVelo"] * EffectiveVelo +
+                      coefficients["VertBreak"] * VertBreak +
+                      coefficients["InducedVertBreak"] * InducedVertBreak +
+                      coefficients["HorzBreak"] * HorzBreak +
+                      coefficients["pfxx"] * pfxx +
+                      coefficients["pfxz"] * pfxz +
+                      coefficients["SpinRate"] * SpinRate +
+                      coefficients["SpinAxis"] * SpinAxis +
+                      coefficients["RelHeight"] * RelHeight +
+                      coefficients["RelSide"] * RelSide +
+                      coefficients["Extension"] * Extension +
+                      coefficients["PlateLocHeight"] * PlateLocHeight +
+                      coefficients["PlateLocSide"] * PlateLocSide +
+                      coefficients["VertApprAngle"] * VertApprAngle +
+                      coefficients["HorzApprAngle"] * HorzApprAngle)
+
+stuff_plus_calc
 ```
 
