@@ -14,7 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 ```
 
-# Reading the data
+# Read the dataset
 
 ```{r}
 data <- read_csv("./data/UCLA2023-2024.csv")
@@ -28,7 +28,7 @@ head(data)
 colnames(data)
 ```
 
-Chatgpt predictor ideas:
+Predictor Ideas:
 
 Velocity:
 
@@ -71,7 +71,7 @@ Location & Trajectory (Optional, but can improve Stuff+ models):
     * VertApprAngle (Vertical approach angle)
     * HorzApprAngle (Horizontal approach angle)
     
-# Add Swinging Strikes
+# Add Swinging Strikes**NEED TO FIX**
 
 ```{r}
 # Calculate swinging strike percentage
@@ -89,7 +89,7 @@ data_mutate <- data %>%
 
     
     
-# Stuff + 
+# Calculating Stuff+
 
 ```{r}
 # Select the variables we need
