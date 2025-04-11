@@ -26,8 +26,21 @@ Ways to improve the model:
     * Normalize all approach angles so that they will hit the middle of the zone 
     
     
+3/10/25 Meeting Notes
+
+* If approach angle needs to be normalized so that pitches will not be based on location
+* If using spin direction, take sin and cos, and covert to radians(to get a relative spin axis)
+* Normalizing for pitch count(No swings on 3-0 count or 0-2 counts)
+  * A whiff in 3-0 count is worth more stuff than in 0-2 count
+* Develop a criteria for model performance
+  * Getting drafted, ERA, Walks, Strikeouts, Player Rankings
+    
+    
 To do: checklist
 - [] Calculate basic stuff-plus
-- [] Apply normalizations
+- [] Look into count normalization
+- [] Apply effective normalization
+- [] Look into different ways to train models 
+- [] Look for a model performance criterion
     
- 
+    
