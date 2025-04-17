@@ -13,7 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r packages, include=FALSE}
 library(tidyverse)
-library(xgboost)
+#library(xgboost)
 ```
 
 # Read the dataset
@@ -164,30 +164,6 @@ data_sinker <- data %>%
   filter(TaggedPitchType == "Sinker")
 ```
 
-Misc Code Chunks: 
-```{r}
-# Calculate team-wide SD and mean for metrics
-# means <- stuff_data %>%
-#   group_by("TaggedPitchType") %>%
-#   summarise_all(funs(mean), na.rm = TRUE)
-# means
-# 
-# sds <- stuff_data %>%
-#   group_by("TaggedPitchType") %>%
-#   summarise_all(funs(sd), na.rm = TRUE)
-# means
-```
-
-```{r}
-# stuff_data_standardized <- stuff_data %>%
-#   group_by("TaggedPitchType") %>%
-#   mutate_at(vars(RelSpeed:swstr_percent), scale) %>%
-#   drop_na()
-# 
-# stuff_data_standardized
-```
-
-
 ### Part 3a: Calculating Coefficients Using LM
 
 Fastball Model
@@ -265,39 +241,8 @@ Misc Code Chunks
 ```
 
 
-```{r}
-# # Calculate Stuff+
-# coefficients <- coef(model)
-# 
-# 
-# 
-# stuff_plus_calc <- stuff_data_standardized %>%
-#     rowwise() %>%
-#     mutate(stuff_plus = coefficients["(Intercept)"] +
-#                       coefficients["RelSpeed"] * RelSpeed +
-#                       coefficients["ZoneSpeed"] * ZoneSpeed +
-#                       coefficients["EffectiveVelo"] * EffectiveVelo +
-#                       coefficients["VertBreak"] * VertBreak +
-#                       coefficients["InducedVertBreak"] * InducedVertBreak +
-#                       coefficients["HorzBreak"] * HorzBreak +
-#                       coefficients["pfxx"] * pfxx +
-#                       coefficients["pfxz"] * pfxz +
-#                       coefficients["SpinRate"] * SpinRate +
-#                       coefficients["SpinAxis"] * SpinAxis +
-#                       coefficients["RelHeight"] * RelHeight +
-#                       coefficients["RelSide"] * RelSide +
-#                       coefficients["Extension"] * Extension +
-#                       coefficients["PlateLocHeight"] * PlateLocHeight +
-#                       coefficients["PlateLocSide"] * PlateLocSide +
-#                       coefficients["VertApprAngle"] * VertApprAngle +
-#                       coefficients["HorzApprAngle"] * HorzApprAngle)
-# 
-# stuff_plus_calc
-```
-
-
 # Misc
 
 ## Stuff++ 
 
-We could use a non-linear model to calculate Stuff+ but it would be a black-box model, meaning it gives us a score with no interpretable coefficients. The model might have better performance but low interpretability, hence we only know what the stuff is but we don't know what actually affects stuff
+We could use a non-linear model to calculate Stuff+ but it would be a black-box model, meaning it gives us a score with no interpretable coefficients. The model might have better performance but low interpretability, hence we only know what the stuff is but we don't know what actually affects stuff.
