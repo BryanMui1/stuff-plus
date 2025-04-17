@@ -37,10 +37,12 @@ Ways to improve the model:
     
     
 To do: checklist
-- [] Calculate basic stuff-plus
-- [] Look into count normalization
-- [] Apply effective normalization
-- [] Look into different ways to train models 
-- [] Look for a model performance criterion
+
+- [x] Calculate basic stuff-plus
+- [] Reformat data structures to suit stuff-plus models for all pitch types
+- [] Bryan: Look into count normalization(By next meeting)
+- [] Apply effective normalization(Mentioned in meeting)
+- [x] Look into different ways to train models 
+- [] Look for a model performance criterion(By next meeting)
     
     

@@ -1,6 +1,6 @@
 ---
 title: "stuff-plus"
-author: "Bryan Mui - UID 506021334"
+author: "Bryan Mui, BSA Baseball Consulting"
 date: "2025-03-05"
 output: pdf_document
 ---
@@ -96,20 +96,6 @@ data %>%
 ```
 We can see that we have ample data to produce a model for 1) Fastball, 2) Curve Ball, 3) Change Up, 4) Slider, 5) Sinker. The rest of the pitches have limited observations
 
-```{r}
-# Section the Data based off pitch type(Run After we've transformed variables)
-# data_fastball <- data %>%
-#   filter(TaggedPitchType == "Fastball")
-# data_curveball <- data %>%
-#   filter(TaggedPitchType == "Curveball")
-# data_changeup <- data %>%
-#   filter(TaggedPitchType == "ChangeUp")
-# data_slider <- data %>%
-#   filter(TaggedPitchType == "Slider")
-# data_sinker <- data %>%
-#   filter(TaggedPitchType == "Sinker")
-```
-
     
 ## Part 2: Target Variable(set hit = 0/not a hit = 1)
 
@@ -138,7 +124,6 @@ vars <- c(
     "HorzBreak",
     "SpinRate",
     "SpinAxis",
-    "Tilt",
     "RelHeight",
     "RelSide",
     "Extension",
@@ -147,102 +132,91 @@ vars <- c(
     "hit_response"
 )
 
-data <- data %>%
+data_filtered <- data %>%
   select(all_of(vars))
 
-# Now create separate datasets for all the pitch types
-# Section the Data based off pitch type(Run After we've transformed variables)
-data_fastball <- data %>%
-  filter(TaggedPitchType == "Fastball")
-data_curveball <- data %>%
+# Now to partition separate datasets for all the pitch types
+data_partitioned <- list()
+
+data_partitioned[["Fastball"]] <- data_filtered %>%
+  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall" | TaggedPitchType == "OneSeamFastBall")
+data_partitioned[["Curveball"]] <- data_filtered %>%
   filter(TaggedPitchType == "Curveball")
-data_changeup <- data %>%
-  filter(TaggedPitchType == "ChangeUp")
-data_slider <- data %>%
+data_partitioned[["Slider"]] <- data_filtered %>%
   filter(TaggedPitchType == "Slider")
-data_sinker <- data %>%
+data_partitioned[["ChangeUp"]] <- data_filtered %>%
+  filter(TaggedPitchType == "ChangeUp")
+data_partitioned[["Sinker"]] <- data_filtered %>%
   filter(TaggedPitchType == "Sinker")
+
+print(data_partitioned)
 ```
 
 ### Part 3a: Calculating Coefficients Using LM
 
-Fastball Model
+Training Models
 
 ```{r}
+# Model Variables used to predict Y, feel free to change
 model_vars <- c(
-    "RelSpeed",
-    "ZoneSpeed",
-    "EffectiveVelo",
-    "VertBreak",
-    "InducedVertBreak",
+    "RelSpeed", # Speed of ball at release
+    "ZoneSpeed", # Speed of ball at the plate
+    "EffectiveVelo", # Perceived pitch speed by the batter
+    "VertBreak", # Full vertical break
+    "InducedVertBreak", # Vertical break solely by the pitch(without the movement from gravity)
     "HorzBreak",
     "SpinRate",
-    "SpinAxis",
-    "Tilt",
-    "RelHeight",
-    "RelSide",
-    "Extension",
-    "VertApprAngle",
-    "HorzApprAngle"
+    "SpinAxis", # spin axis from 0-360 degrees
+    "RelHeight", # Vertical distance of the ball above home plate when the pitcher releases the balls
+    "RelSide", # Distance from the y-axis from which the pitcher releases the ball
+    "Extension", # Distance towards home plate from which the pitcher releases the ball relative to the pitching rubber
+    "VertApprAngle", # Vertical Approach Angle - The vertical angle formed by the intersection of the y-axis and the ball’s path (in the z-direction) as it crosses the front of home plate. (Degrees)
+    "HorzApprAngle" # Horizontal Approach Angle - The horizontal angle formed by the intersection of the y-axis and the ball’s path (in the x-direction) as it crosses the front of home plate (Degrees)
 )
 
 # get the LM equation formatted
 equation <- paste("hit_response ~ ", paste(model_vars, collapse = " + "))
-print(equation)
+# print(equation)
 
-# train
-lm_fb <- lm(formula(equation), data = data_fastball)
-
-# summarize
-summary(lm_fb)
-
-# standardize stuff to 100
-stuff_fb <- data_fastball %>%
-  mutate(
-    raw_stuff = predict(lm_fb, newdata = .),
-    StuffPlus = 100 * raw_stuff / mean(raw_stuff, na.rm = TRUE)
-  )
+# fit the model, predict stuff+ and standardize to 100
+lms <- list()
+stuff_plus <- list()
+for(i in attr(data_partitioned, "names")) {
+  lms[[i]] <- lm(formula(equation), data = data_partitioned[[i]])
+  print(summary(lms[[i]]))
+  stuff_plus[[i]] <- data_partitioned[[i]] %>%
+    mutate(
+      raw_stuff = predict(lms[[i]], newdata = .),
+      StuffPlus = 100 * raw_stuff / mean(raw_stuff, na.rm = TRUE)
+    )
+}
 ```
 
-Ranking Top 50 Pitches Given by Stuff Plus
+
+Ranking The Top 50 Pitches Given by Stuff Plus:
 
 ```{r}
-top_50 <- stuff_fb %>%
-  top_n(50, StuffPlus)
+for(i in attr(data_partitioned, "names")) {
+  stuff_plus[[i]] %>%
+  top_n(50, StuffPlus) %>%
+  print(head(n = 50))
+}
 
-head(top_50, 50)
 ```
-
-
-
-
-Misc Code Chunks
-```{r}
-# xgb_fb <- xgboost(
-#   data = X,
-#   label = y,
-#   objective = "binary:logistic",
-#   nrounds = 100,
-#   verbose = 0
-# )
-# 
-# importance <- xgb.importance(model = xgb_model)
-# xgb.plot.importance(importance)
-# model <- lm(swstr_percent ~ RelSpeed + ZoneSpeed + EffectiveVelo +
-#             VertBreak + InducedVertBreak + HorzBreak +
-#             pfxx + pfxz + SpinRate + SpinAxis +
-#             RelHeight + RelSide + Extension +
-#             PlateLocHeight + PlateLocSide +
-#             VertApprAngle + HorzApprAngle,
-#             data = stuff_data_standardized)
-# 
-# summary(model)
-# model$coefficients
-```
-
 
 # Misc
 
 ## Stuff++ 
 
 We could use a non-linear model to calculate Stuff+ but it would be a black-box model, meaning it gives us a score with no interpretable coefficients. The model might have better performance but low interpretability, hence we only know what the stuff is but we don't know what actually affects stuff.
+
+ChatGPT Recommendation:
+
+    Do I want to know the magnitude and direction of a variable’s impact?
+    → Use lm, logistic, beta, GAM.
+
+    Do I need to rank importance but not interpret exact relationships?
+    → Try tree models + SHAP.
+
+    Do I want interpretable nonlinear effects?
+    → Use GAMs — they’re really underused for stuff like this
