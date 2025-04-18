@@ -34,15 +34,23 @@ Ways to improve the model:
   * A whiff in 3-0 count is worth more stuff than in 0-2 count
 * Develop a criteria for model performance
   * Getting drafted, ERA, Walks, Strikeouts, Player Rankings
+  
+4/17/25 Meeting Notes
+
+* Keep looking into count and approach angle normalization 
+* Keep looking for a model performance criterion
+* Check your R^2 and try to tune our models
     
     
 To do: checklist
 
 - [x] Calculate basic stuff-plus
-- [] Reformat data structures to suit stuff-plus models for all pitch types
-- [] Bryan: Look into count normalization(By next meeting)
-- [] Apply effective normalization(Mentioned in meeting)
-- [x] Look into different ways to train models 
+- [x] Reformat data structures to suit stuff-plus models for all pitch types
+- [X] Look into different ways to train models 
+- [X] Look into a better predictor criterion(Maybe CSW%)
+- [X] Look into count normalization(By next meeting)
+- [] Look into approach angle normalization based on location(Mentioned in meeting)
+- [] Look into spin direction normalization
 - [] Look for a model performance criterion(By next meeting)
     
     

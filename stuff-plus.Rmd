@@ -93,20 +93,85 @@ Location & Trajectory (Optional, but can improve Stuff+ models):
 data %>% 
   group_by(TaggedPitchType) %>%
   summarize(Count = n())
+
+data %>%
+  mutate(Pitcher = as.factor(Pitcher))
 ```
 We can see that we have ample data to produce a model for 1) Fastball, 2) Curve Ball, 3) Change Up, 4) Slider, 5) Sinker. The rest of the pitches have limited observations
 
     
-## Part 2: Target Variable(set hit = 0/not a hit = 1)
+## Part 2: Target Variable
+
+Going to create a predicted hit probability predictor on a 0–1 scale, defined like:
+
+* 0 = Home run
+* 0.2 = Dangerous Contact
+  - High exit velocity (e.g., > 95 mph)
+  - Ideal launch angle (e.g., 10–30°)
+* 0.5 = Weak contact/foul
+  - Low exit velocity or bad angle (pop-ups, grounders, fouls)
+* 0.8 = Called Strike
+* 1 = Whiff/Swinging Strike
+
 
 ```{r}
-# Calculate hit/no-hit on pitch
+# Calculate Hit or CSW Score
 data <- data %>%
-  mutate(hit_response = ifelse(PlayResult != "Undefined", 1, 0)) %>%
-  relocate(hit_response, .after = PitchCall)
+  mutate(
+    hitCSW = case_when(
+      PlayResult == "HomeRun" ~ 0,
+      ExitSpeed > 95 & Angle >= 10 & Angle <= 30 ~ 0.1, # dangerous hit
+      PitchCall %in% c("InPlay") ~ 0.3,
+      PitchCall == "BallCalled" | PitchCall == "BallIntentional" | PitchCall == "BallinDirt" | PitchCall == "HitByPitch" | PitchCall == "Undefined"    ~ 0.6,
+      PitchCall == "FoulBall" | PitchCall == "FoulBallFieldable" | PitchCall == "FoulBallNotFieldable"   ~ 0.6,
+      PitchCall %in% c("StrikeCalled") ~ 0.8,
+      PitchCall %in% c("StrikeSwinging") ~ 1, 
+    )
+  ) %>%
+  relocate(hitCSW, .after = PitchCall)
+
+# Predict Hit or CSW for per pitch(Using Regression)
+
+# data %>%
+#   group_by(PitchCall) %>%
+#   summarize(Count = n())
+# 
+# data %>%
+#   group_by(PlayResult) %>%
+#   summarize(Count = n())
+# 
+# data %>%
+#   group_by(hitCSW) %>%
+#   summarize(Count = n())
+
 ```
 
     
+### Normalizations
+
+We need to apply the following normalizations:
+
+* Count
+* Approach Angle
+* Spin Direction
+    
+```{r}
+# Normalize Based on Count
+count_model <- lm(hitCSW ~ Balls + Strikes, data = data)
+summary(count_model)
+
+data <- data %>%
+  mutate(hitCSW_resid = resid(count_model)) %>%
+  relocate(hitCSW_resid, .after = hitCSW)
+
+data %>%
+  select(Balls, Strikes, hitCSW_resid) %>%
+  group_by(Balls, Strikes) %>%
+  summarize(mean_hitCSW = mean(hitCSW_resid))
+```
+
+
+
     
 ## Part 3: Calculating Stuff+
 
@@ -129,7 +194,8 @@ vars <- c(
     "Extension",
     "VertApprAngle",
     "HorzApprAngle",
-    "hit_response"
+    "hitCSW",
+    "hitCSW_resid"
 )
 
 data_filtered <- data %>%
@@ -175,15 +241,17 @@ model_vars <- c(
 )
 
 # get the LM equation formatted
-equation <- paste("hit_response ~ ", paste(model_vars, collapse = " + "))
+equation <- paste("hitCSW_resid ~ ", paste(model_vars, collapse = " + "))
 # print(equation)
 
 # fit the model, predict stuff+ and standardize to 100
 lms <- list()
 stuff_plus <- list()
 for(i in attr(data_partitioned, "names")) {
+  cat(i, "Model: \n")
   lms[[i]] <- lm(formula(equation), data = data_partitioned[[i]])
   print(summary(lms[[i]]))
+  cat("-------------------------------------------------\n")
   stuff_plus[[i]] <- data_partitioned[[i]] %>%
     mutate(
       raw_stuff = predict(lms[[i]], newdata = .),
@@ -198,11 +266,25 @@ Ranking The Top 50 Pitches Given by Stuff Plus:
 ```{r}
 for(i in attr(data_partitioned, "names")) {
   stuff_plus[[i]] %>%
-  top_n(50, StuffPlus) %>%
-  print(head(n = 50))
+    top_n(50, StuffPlus) %>%
+    print(head(., n = 50))
 }
 
 ```
+
+```{r}
+# Top Pitchers for each pitch
+
+for(i in attr(data_partitioned, "names")) {
+  stuff_plus[[i]] %>%
+    group_by(Pitcher) %>%
+    summarise(AvgStuffPlus = mean(StuffPlus, na.rm = TRUE)) %>%
+    arrange(desc(AvgStuffPlus)) %>%
+    mutate(Pitch = i) %>%
+    print(head(., n = 50))
+}
+```
+
 
 # Misc
 
