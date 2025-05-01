@@ -7,7 +7,7 @@ format: pdf
 
 ```{r packages, include=FALSE}
 library(tidyverse)
-#library(xgboost)
+library(xgboost)
 library(lubridate)
 ```
 
@@ -140,19 +140,135 @@ csw <- main %>%
     .groups = "drop"
   )
 csw
+
+# Calculate CSW%, but only after a pitcher has recorded > 10 pitches
+main <- main %>%
+  mutate(
+    is_csw = PitchCall %in% c("StrikeCalled", "StrikeSwinging"),
+    pitch_index = row_number(),
+    csw_league = lag(cumsum(is_csw) / pitch_index, default = 0)  # rolling league CSW%
+  ) %>%
+  group_by(Pitcher) %>%
+  mutate(
+    pitcher_n = row_number(),  # per-pitcher index
+    csw_p = lag(cumsum(is_csw) / pitcher_n, default = 0),        # rolling CSW% for pitcher
+    csw_p = if_else(pitcher_n < 10, 0, csw_p)                     # apply 10-pitch min
+  ) %>%
+  ungroup() %>%
+  mutate(
+    csw_league = if_else(pitch_index < 20, 0, csw_league)         # apply 20-pitch min for league CSW
+  ) %>%
+  relocate(pitch_index, .before = PitchNo) %>%
+  relocate(csw_league, .after = PitchCall) %>%
+  relocate(pitcher_n, csw_p, .after = Pitcher)
+
 ```
 
 ### Append Metrics to data 
 
 ```{r}
+csw_weight_factor <- 0.25 # contols the weight factor for CSW for pitchers
+
 main <- main %>%
   mutate(
+    csw_diff = csw_p - csw_league, 
     hybrid_quality = hybrid_quality(PitchCall, PlayResult, ExitSpeed, Angle, Direction),
-    is_csw = PitchCall %in% c("StrikeCalled", "StrikeSwinging"),
-    pitch_index = row_number(),
-    csw_cum = lag(cumsum(is_csw) / cumsum(rep(1, n())), default = NA_real_)
-         ) %>%
-  relocate(c("hybrid_quality", "is_csw", "pitch_index", "csw_cum"), .after = PitchCall)
-
+    hybrid_weighted = if_else(
+      csw_p == 0 | csw_league == 0,  # early pitchers — don't modify
+      hybrid_quality,
+      hybrid_quality * (1 + csw_weight_factor * csw_diff)),
+    hybrid_weighted = pmin(pmax(hybrid_weighted, 0), 1)
+    ) %>% 
+  relocate(hybrid_quality, hybrid_weighted, .after = PitchCall)
 ```
 
+
+## Apply Normalizations
+
+## Training Models
+
+
+```{r}
+# Select the variables we need, refer the beginning to see which variables are being selected
+# vars <- c(
+#     "Pitcher",
+#     "PitcherId",
+#     "TaggedPitchType",
+#     "RelSpeed",
+#     "ZoneSpeed",
+#     "EffectiveVelo",
+#     "VertBreak",
+#     "InducedVertBreak",
+#     "HorzBreak",
+#     "SpinRate",
+#     "SpinAxis",
+#     "RelHeight",
+#     "RelSide",
+#     "Extension",
+#     "VertApprAngle",
+#     "HorzApprAngle",
+#     "hitCSW",
+#     "hitCSW_resid"
+# )
+# 
+# data_filtered <- data %>%
+#   select(all_of(vars))
+
+# Now to partition separate datasets for all the pitch types
+data_partitioned <- list()
+
+data_partitioned[["Fastball"]] <- main %>%
+  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall" | TaggedPitchType == "OneSeamFastBall")
+data_partitioned[["Curveball"]] <- main %>%
+  filter(TaggedPitchType == "Curveball")
+data_partitioned[["Slider"]] <- main %>%
+  filter(TaggedPitchType == "Slider")
+data_partitioned[["ChangeUp"]] <- main %>%
+  filter(TaggedPitchType == "ChangeUp")
+data_partitioned[["Sinker"]] <- main %>%
+  filter(TaggedPitchType == "Sinker")
+
+print(data_partitioned)
+```
+
+
+
+Training Models
+
+```{r}
+# Model Variables used to predict Y, feel free to change
+model_vars <- c(
+    "RelSpeed", # Speed of ball at release
+    "ZoneSpeed", # Speed of ball at the plate
+    "EffectiveVelo", # Perceived pitch speed by the batter
+    "VertBreak", # Full vertical break
+    "InducedVertBreak", # Vertical break solely by the pitch(without the movement from gravity)
+    "HorzBreak",
+    "SpinRate",
+    "SpinAxis", # spin axis from 0-360 degrees
+    "RelHeight", # Vertical distance of the ball above home plate when the pitcher releases the balls
+    "RelSide", # Distance from the y-axis from which the pitcher releases the ball
+    "Extension", # Distance towards home plate from which the pitcher releases the ball relative to the pitching rubber
+    "VertApprAngle", # Vertical Approach Angle - The vertical angle formed by the intersection of the y-axis and the ball’s path (in the z-direction) as it crosses the front of home plate. (Degrees)
+    "HorzApprAngle" # Horizontal Approach Angle - The horizontal angle formed by the intersection of the y-axis and the ball’s path (in the x-direction) as it crosses the front of home plate (Degrees)
+)
+
+# get the LM equation formatted
+equation <- paste("hybrid_weighted ~ ", paste(model_vars, collapse = " + "))
+# print(equation)
+
+# fit the model, predict stuff+ and standardize to 100
+lms <- list()
+stuff_plus <- list()
+for(i in attr(data_partitioned, "names")) {
+  cat(i, "Model: \n")
+  lms[[i]] <- lm(formula(equation), data = data_partitioned[[i]])
+  print(summary(lms[[i]]))
+  cat("-------------------------------------------------------------------------------------\n")
+  stuff_plus[[i]] <- data_partitioned[[i]] %>%
+    mutate(
+      raw_stuff = predict(lms[[i]], newdata = .),
+      StuffPlus = 100 * raw_stuff / mean(raw_stuff, na.rm = TRUE)
+    )
+}
+```
