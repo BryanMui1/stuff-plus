@@ -251,7 +251,7 @@ for(i in attr(data_partitioned, "names")) {
   cat(i, "Model: \n")
   lms[[i]] <- lm(formula(equation), data = data_partitioned[[i]])
   print(summary(lms[[i]]))
-  cat("-------------------------------------------------\n")
+  cat("-------------------------------------------------------------------------------------\n")
   stuff_plus[[i]] <- data_partitioned[[i]] %>%
     mutate(
       raw_stuff = predict(lms[[i]], newdata = .),

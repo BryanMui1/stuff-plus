@@ -44,13 +44,14 @@ Ways to improve the model:
     
 To do: checklist
 
-- [x] Calculate basic stuff-plus
-- [x] Reformat data structures to suit stuff-plus models for all pitch types
-- [X] Look into different ways to train models 
-- [X] Look into a better predictor criterion(Maybe CSW%)
-- [X] Look into count normalization(By next meeting)
-- [] Look into approach angle normalization based on location(Mentioned in meeting)
-- [] Look into spin direction normalization
-- [] Look for a model performance criterion(By next meeting)
+- ~~Calculate basic stuff-plus~~
+- ~~Reformat data structures to suit stuff-plus models for all pitch types~~
+- ~~Look into different ways to train models~~
+- better predictor criterion(CSW+)
+- count normalization
+- approach angle normalization based on location
+- spin axis normalization
+- batter quality normalization
+- Look for a model performance criterion
     
     

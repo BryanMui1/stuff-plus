@@ -1,0 +1,158 @@
+---
+title: "Pure Stuff"
+format: pdf
+---
+
+## Pckg
+
+```{r packages, include=FALSE}
+library(tidyverse)
+#library(xgboost)
+library(lubridate)
+```
+
+```{r}
+# Path-to-data, /data/datasets.csv
+data_original <- read_csv("./data/UCLA2023-2024.csv")
+# The data set that we will be mutating
+main <- data_original
+```
+
+## Colnames
+
+```{r}
+colnames <- as.data.frame(cbind(indx = 1:length(colnames(main)), colnames = colnames(main)))
+```
+
+
+## Clean the Data
+
+```{r}
+filtered_vars <- c(
+    "Pitcher",
+    "PitcherId",
+    "TaggedPitchType",
+    "RelSpeed",
+    "ZoneSpeed",
+    "EffectiveVelo",
+    "VertBreak",
+    "InducedVertBreak",
+    "HorzBreak",
+    "SpinRate",
+    "SpinAxis",
+    "RelHeight",
+    "RelSide",
+    "Extension",
+    "VertApprAngle",
+    "HorzApprAngle"
+)
+
+main %>%
+  select(all_of(filtered_vars)) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
+  arrange(desc(na_count))
+
+main <- main %>%
+  drop_na(all_of(filtered_vars))
+
+# reorder chronologically
+
+combine_datetime <- function(date_vec, time_vec) {
+  # Parse dates
+  date_parsed <- mdy(date_vec)
+
+  # Split time strings into components
+  time_parts <- strsplit(time_vec, ":")
+  hour <- as.numeric(sapply(time_parts, `[`, 1))
+  minute <- as.numeric(sapply(time_parts, `[`, 2))
+  second <- as.numeric(sapply(time_parts, `[`, 3))
+
+  # Calculate how many full days to add to the date
+  date_shift <- floor(hour / 24)
+  hour_adj <- hour %% 24
+
+  # Create adjusted datetime
+  datetime <- make_datetime(
+    year = year(date_parsed),
+    month = month(date_parsed),
+    day = day(date_parsed) + date_shift,
+    hour = hour_adj,
+    min = minute,
+    sec = second
+  )
+
+  return(datetime)
+}
+
+main <- main %>%
+  mutate(date_parsed = combine_datetime(Date, as.character(Time)))%>%
+  arrange(Date, PitchNo) %>%
+  relocate(date_parsed, .after = PitchNo)
+```
+
+
+## CSW+ 
+
+### Hit Quality + Play Outcome Hybrid Metric
+
+```{r}
+# Continuous function to calculate pitch quality score
+# Maps contact quality from 0 (perfect contact) to 1 (whiff)
+hybrid_quality <- function(PitchCall, PlayResult, ExitSpeed = NA, Angle = NA, Direction = NA) {
+  # Base score from pitch/plate appearance outcome
+  base_score <- case_when(
+    PlayResult == "HomeRun" ~ 0,
+    PitchCall %in% c("BallCalled", "BallIntentional", "BallinDirt", "HitByPitch", "Undefined") ~ 0.2,
+    PitchCall %in% c("InPlay") ~ 0.3,
+    PitchCall %in% c("FoulBall", "FoulBallFieldable", "FoulBallNotFieldable") ~ 0.5,
+    PitchCall == "StrikeCalled" ~ 0.8,
+    PitchCall == "StrikeSwinging" ~ 1,
+    TRUE ~ 0.4
+  )
+
+  # Logical vector for rows with full batted-ball data
+  has_contact_data <- !is.na(ExitSpeed) & !is.na(Angle) & !is.na(Direction)
+
+  # Compute batted-ball-based contact quality for those rows
+  ev_component <- pmax(0, pmin(1, (110 - ExitSpeed) / 50))
+  la_component <- pmin(1, ((Angle - 17)^2) / 1600)
+  horiz_component <- pmin(1, abs(Direction) / 45)
+  contact_score <- 0.5 * ev_component + 0.3 * la_component + 0.2 * horiz_component
+
+  # Combine base and contact score for rows with contact data
+  final_score <- base_score
+  final_score[has_contact_data] <- 0.6 * base_score[has_contact_data] + 
+                                   0.4 * contact_score[has_contact_data]
+
+  return(final_score)
+}
+```
+
+### CSW+ Called Strikes Plus Whiffs% 
+
+```{r}
+# Pitcher gets a special weight if they have high CSW%
+csw <- main %>%
+  group_by(Pitcher) %>%
+  summarise(
+    csw = mean(PitchCall %in% c("StrikeCalled", "StrikeSwinging")),
+    .groups = "drop"
+  )
+csw
+```
+
+### Append Metrics to data 
+
+```{r}
+main <- main %>%
+  mutate(
+    hybrid_quality = hybrid_quality(PitchCall, PlayResult, ExitSpeed, Angle, Direction),
+    is_csw = PitchCall %in% c("StrikeCalled", "StrikeSwinging"),
+    pitch_index = row_number(),
+    csw_cum = lag(cumsum(is_csw) / cumsum(rep(1, n())), default = NA_real_)
+         ) %>%
+  relocate(c("hybrid_quality", "is_csw", "pitch_index", "csw_cum"), .after = PitchCall)
+
+```
+
