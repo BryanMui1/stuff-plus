@@ -41,6 +41,9 @@ Ways to improve the model:
 * Keep looking for a model performance criterion
 * Check your R^2 and try to tune our models
     
+5/1/25 Meeting Notes  
+Induced Vertical Break: Normalize by plate-location-height  
+Get the model results for Fastball and Sliders(Do some EDA, try to push for higher R-squared)  
     
 To do: checklist
 
