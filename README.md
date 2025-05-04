@@ -50,11 +50,14 @@ To do: checklist
 - ~~Calculate basic stuff-plus~~
 - ~~Reformat data structures to suit stuff-plus models for all pitch types~~
 - ~~Look into different ways to train models~~
-- better predictor criterion(CSW+)
+- Reformat: partition data after apply normalizations
+- EDA: Correlation matrix, pairs plots, check assumptions
+- Normalize the predictor criterion(CSW+)
 - count normalization
+- Normalize induced vertical break
 - approach angle normalization based on location
 - spin axis normalization
 - batter quality normalization
-- Look for a model performance criterion
+
     
     
