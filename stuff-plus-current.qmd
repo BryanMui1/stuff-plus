@@ -13,6 +13,8 @@ library(ggplot2)
 library(ggcorrplot)
 ```
 
+Read the csv:
+
 ```{r}
 # Path-to-data, /data/datasets.csv
 data_original <- read_csv("./data/UCLA2023-2024.csv")
@@ -66,15 +68,16 @@ main <- main %>%
   drop_na(all_of(filtered_vars))
 
 main <- main %>%
-  mutate(date_parsed = combine_datetime(Date, as.character(Time)))%>%
-  arrange(UTCDateTime, PitchNo) %>%
-  relocate(date_parsed, .after = PitchNo)
+  arrange(UTCDateTime, PitchNo)
 ```
 
 
-## CSW+ 
+
+## Response Var: CSW+ Play Outcome
 
 ### Hit Quality + Play Outcome Hybrid Metric
+
+Considering modifying this because it likely has too much situational context that can't be predicted by a pitcher's stuff
 
 ```{r}
 # Continuous function to calculate pitch quality score
@@ -109,7 +112,11 @@ hybrid_quality <- function(PitchCall, PlayResult, ExitSpeed = NA, Angle = NA, Di
 }
 ```
 
-### CSW+ Called Strikes Plus Whiffs% 
+### Rolling CSW+ Called Strikes Plus Whiffs% 
+
+Consider using this to train the model because it has a better distribution.
+
+Make the data rolling so no data points get leaked to the model
 
 ```{r}
 # Pitcher gets a special weight bonus if they have high CSW%, if they have low CSW% they get a penalty
@@ -163,58 +170,11 @@ main <- main %>%
 
 ## Apply Normalizations
 
-```{r}
-# One hot encode, batterside, count(balls and strikes), PAofinning, inning, outs
-main <- main %>%
-  mutate(Count = factor(paste0(Balls, "-", Strikes))) %>%
-  mutate(
-    BatterSide = factor(BatterSide),
-    PAofInning = factor(PAofInning),
-    Inning = factor(Inning),
-    Outs = factor(Outs)
-  )
+### Model Vars
 
-one_hot_matrix <- model.matrix(
-  ~ BatterSide + Count + PAofInning + Inning + Outs - 1,  # "-1" removes intercept
-  data = main
-)
-
-# Convert matrix to a data frame
-one_hot_df <- as.data.frame(one_hot_matrix)
-
-# Combine with your original dataset
-main <- cbind(main, one_hot_df)
-
-```
-
-
-
+Model Variables used to predict the response, feel free to change
 
 ```{r}
-# Model Variables used to predict Y, feel free to change
-
-# model_vars <- c(
-#   "RelSpeed",           # Speed at release
-#   "ZoneSpeed",          # Speed at the plate
-#   "EffectiveVelo",      # Perceived pitch speed
-#   "VertBreak",          # Full vertical break
-#   "InducedVertBreak",   # Break excluding gravity
-#   "HorzBreak",          # Horizontal movement
-#   "SpinRate",           # Raw spin
-#   "SpinAxis",           # 0–360 spin axis
-#   "RelHeight",          # Release height
-#   "RelSide",            # Horizontal release side
-#   "Extension",          # Distance toward plate
-#   "VertApprAngle",      # Vertical approach angle
-#   "HorzApprAngle",      # Horizontal approach angle
-#   "VertRelAngle",       # Vertical release angle
-#   "HorzRelAngle",       # Horizontal release angle
-#   "PlateLocHeight",     # Raw vertical location
-#   "PlateLocSide",       # Raw horizontal location
-#   "ZoneTime",           # Time to reach plate
-#   "SpeedDrop"           # Velo loss from release to plate
-# )
-
 model_vars <- c(
   # Physical pitch characteristics
   "RelSpeed", "ZoneSpeed", "EffectiveVelo",
@@ -225,28 +185,22 @@ model_vars <- c(
   "VertRelAngle", "HorzRelAngle",
   "PlateLocHeight", "PlateLocSide",
   "ZoneTime", "SpeedDrop"
-  
-  # # Count (one-hot)
-  # "Count0-1", "Count0-2", "Count1-0", "Count1-1", "Count1-2",
-  # "Count2-0", "Count2-1", "Count2-2", "Count3-0", "Count3-1", "Count3-2",
-  # 
-  # # PA of inning (one-hot)
-  # "PAofInning2", "PAofInning3", "PAofInning4", "PAofInning5",
-  # "PAofInning6", "PAofInning7", "PAofInning8", "PAofInning9",
-  # "PAofInning10", "PAofInning11", "PAofInning12", "PAofInning13",
-  # "PAofInning14", "PAofInning15", "PAofInning16",
-  # 
-  # # Inning (one-hot)
-  # "Inning2", "Inning3", "Inning4", "Inning5", "Inning6",
-  # "Inning7", "Inning8", "Inning9", "Inning10", "Inning11",
-  # "Inning12", "Inning13",
-  # 
-  # # Outs (one-hot)
-  # "Outs1", "Outs2", "Outs3"
 )
 ```
 
-## Visualizations
+## Supplementary Visualizations + EDA
+
+### EDA
+
+Correlation Matrix 
+
+Plotting pairs 
+
+VIF(Colinearity)
+
+### Misc Visualizations
+
+Density Distribution of the Response Variables:
 
 ```{r}
 ggplot(main, aes(x = hybrid_weighted)) +
@@ -259,10 +213,10 @@ ggplot(main, aes(x = hybrid_weighted)) +
   theme_minimal()
 
 ggplot(main, aes(x = csw_p)) +
-  geom_density(fill = "steelblue", alpha = 0.6) +
+  geom_density(fill = "blue", alpha = 0.6) +
   labs(
-    title = "Density of CSW",
-    x = "Weighted Pitch Quality",
+    title = "Density of Rolling CSW%",
+    x = "CSW%",
     y = "Density"
   ) +
   theme_minimal()
@@ -309,6 +263,7 @@ Training Models
 
 ```{r}
 # get the LM equation formatted
+# Model vars is towards the beginning of this notebook, in the data cleaning section
 equation <- paste("hybrid_weighted ~ ", paste(model_vars, collapse = " + "))
 # print(equation)
 

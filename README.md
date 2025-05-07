@@ -50,14 +50,20 @@ To do: checklist
 - ~~Calculate basic stuff-plus~~
 - ~~Reformat data structures to suit stuff-plus models for all pitch types~~
 - ~~Look into different ways to train models~~
-- Reformat: partition data after apply normalizations
+- Reformat: partition data after applying normalization
 - EDA: Correlation matrix, pairs plots, check assumptions
-- Normalize the predictor criterion(CSW+)
-- count normalization
-- Normalize induced vertical break
-- approach angle normalization based on location
 - spin axis normalization
+- Count normalization
+- induced vertical break normalization
+- approach angle normalization based on location
 - batter quality normalization
+- Fix the predictor criterion(CSW+)
+
+
+Random ideas:
+
+- What if we trained a model that would predict ExitSpeed, Angle, Direction, HitSpinRate for even the ball pitches, 
+and if that model generalizes well with stuff to be able to impute hit characteristics for even the balls thrown? 
 
     
     
