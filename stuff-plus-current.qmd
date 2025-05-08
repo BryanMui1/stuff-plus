@@ -11,6 +11,7 @@ library(xgboost)
 library(lubridate)
 library(ggplot2)
 library(ggcorrplot)
+library(GGally)
 ```
 
 Read the csv:
@@ -188,7 +189,7 @@ model_vars <- c(
 )
 ```
 
-## Spin Axis Normalization
+### Spin Axis Normalization
 
 ```{r}
 summary(main$SpinAxis)
@@ -209,16 +210,94 @@ main <- main %>%
 summary(main %>% select(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos))
 ```
 
+### Count Normalization
+
+### Induced Vertical Break Normalization
+
+### Approach Angle Normalization Based on Location
+
+### Normalize the ranges of the rest of the variables 
+
 
 ## Supplementary Visualizations + EDA
+
+### Partiitoning the Data by Pitch Type
+
+```{r}
+# Now to partition separate datasets for all the pitch types
+# main %>% 
+#   group_by(TaggedPitchType) %>%
+#   summarise(count = n())
+
+data_partitioned <- list()
+
+data_partitioned[["Fastball"]] <- main %>%
+  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall" | TaggedPitchType == "OneSeamFastBall")
+data_partitioned[["Curveball"]] <- main %>%
+  filter(TaggedPitchType == "Curveball")
+data_partitioned[["Slider"]] <- main %>%
+  filter(TaggedPitchType == "Slider")
+data_partitioned[["ChangeUp"]] <- main %>%
+  filter(TaggedPitchType == "ChangeUp")
+data_partitioned[["Sinker"]] <- main %>%
+  filter(TaggedPitchType == "Sinker")
+
+
+for(i in attr(data_partitioned, "names")) {
+  cat(i, ": ", nrow(data_partitioned[[i]]), " observations \n", sep="")
+}
+```
+
 
 ### EDA
 
 Correlation Matrix 
 
+```{r}
+#| fig-width: 20
+#| fig-align: center
+#| fig-fullwidth: true
+
+cor_vars <- c(
+  # Physical pitch characteristics
+  "RelSpeed", "ZoneSpeed", "EffectiveVelo",
+  "VertBreak", "InducedVertBreak", "HorzBreak",
+  "SpinRate", "SpinAxis",
+  "SpinAxis_sin", "SpinAxis_cos", 
+  "RelHeight", "RelSide", "Extension",
+  "VertApprAngle", "HorzApprAngle",
+  "VertRelAngle", "HorzRelAngle",
+  "PlateLocHeight", "PlateLocSide",
+  "ZoneTime", "SpeedDrop",
+  "hybrid_quality", "csw_p"
+)
+
+model_vars_data <- main %>%
+  select(all_of(cor_vars))
+
+cor_matrix <- cor(model_vars_data, use = "complete.obs")
+
+# pairs(model_vars_data)
+ggcorrplot(cor_matrix, hc.order = FALSE, type = "upper",
+   lab = TRUE)
+```
+
+As we can see, the correlation matrix shows that our response vars (Rolling CSW% and Hybrid) are pretty bad. Will need to update later if we want a chance of a model with high predictive accuracy 
+
 Plotting pairs 
 
-VIF(Colinearity)
+```{r}
+# ggpairs(model_vars_data, columns = c("hybrid_quality", "csw_p", 
+#   "ZoneSpeed", "InducedVertBreak", 
+#   "HorzBreak", "SpinAxis_sin", "SpinAxis_cos", 
+#   "RelHeight", "RelSide", "Extension",
+#   "VertApprAngle", "HorzApprAngle",
+#   "VertRelAngle", "HorzRelAngle",
+#   "PlateLocHeight", "PlateLocSide"))
+ggpairs(model_vars_data, columns = c("hybrid_quality", "csw_p",
+  "ZoneSpeed", "InducedVertBreak",
+  "HorzBreak", "SpinAxis_sin", "SpinAxis_cos"))
+```
 
 ### Misc Visualizations
 
@@ -245,15 +324,6 @@ ggplot(main, aes(x = csw_p)) +
 ```
 
 
-```{r}
-model_vars_data <- main %>%
-  select(all_of(model_vars))
-
-cor_matrix <- cor(model_vars_data, use = "complete.obs")
-
-# pairs(model_vars_data)
-#ggcorrplot(model_vars_data, lab = TRUE)
-```
 
 ```{r}
 colnames <- as.data.frame(cbind(indx = 1:length(colnames(main)), colnames = colnames(main)))
@@ -261,24 +331,6 @@ colnames <- as.data.frame(cbind(indx = 1:length(colnames(main)), colnames = coln
 
 
 ## Training Models
-
-
-```{r}
-# Now to partition separate datasets for all the pitch types
-data_partitioned <- list()
-
-data_partitioned[["Fastball"]] <- main %>%
-  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall" | TaggedPitchType == "OneSeamFastBall")
-data_partitioned[["Curveball"]] <- main %>%
-  filter(TaggedPitchType == "Curveball")
-data_partitioned[["Slider"]] <- main %>%
-  filter(TaggedPitchType == "Slider")
-data_partitioned[["ChangeUp"]] <- main %>%
-  filter(TaggedPitchType == "ChangeUp")
-data_partitioned[["Sinker"]] <- main %>%
-  filter(TaggedPitchType == "Sinker")
-```
-
 
 
 Training Models

@@ -2,6 +2,8 @@
 
 [link-to-spec](https://docs.google.com/document/d/10daUDMT-W5eDnOqNCvLXCmvKB3Uf7R_lpSzxs3G73MQ/edit?tab=t.0)
 
+[Trackman V3 Radar Spec](https://support.trackmanbaseball.com/hc/en-us/articles/5089413493787-V3-FAQs-Radar-Measurement-Glossary-Of-Terms)
+
 3/5/25 Meeting Notes
 
 Essential Starting Items:  
@@ -51,7 +53,7 @@ To do: checklist
 - ~~Reformat data structures to suit stuff-plus models for all pitch types~~
 - ~~Look into different ways to train models~~
 - ~~Reformat: partition data after applying normalization~~
-- spin axis normalization
+- ~~spin axis normalization~~
 - Count normalization
 - induced vertical break normalization
 - approach angle normalization based on location

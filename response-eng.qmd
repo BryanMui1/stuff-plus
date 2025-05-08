@@ -1,0 +1,142 @@
+---
+title: "Response Engineering"
+format: pdf
+---
+
+The idea is to create a model that can interpolate for every row of data. 
+
+Given the hypothetical scenario that every pitch resulted in a swing, the model predicts the whiff%. We call this xWhiff%
+
+Given the hypothetical scenario that the pitch resulted in contact, the model predicts the characteristics of the hit(ExitSpeed, LaunchAngle, HitSpinRate, Direction), we can use those to calculate an expected hit quality score, or xHQ
+
+We'll train two models with the strike/hit data to see if any of these metrics are viable. If both metrics are viable, we can combine them to create a new hybrid pitch quality score, xhPQ
+
+## Pckg
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(xgboost)
+library(lubridate)
+library(ggplot2)
+library(ggcorrplot)
+library(GGally)
+```
+
+Read the csv:
+
+```{r}
+# Path-to-data, /data/datasets.csv
+data_original <- read_csv("./data/UCLA2023-2024.csv")
+# The data set that we will be mutating
+main <- data_original
+```
+
+
+## Clean the Data
+
+```{r}
+filtered_vars <- c(
+  "Pitcher",
+  "PitcherId",
+  "TaggedPitchType",
+  "RelSpeed",           # Speed at release
+  "ZoneSpeed",          # Speed at the plate
+  "EffectiveVelo",      # Perceived pitch speed
+  "VertBreak",          # Full vertical break
+  "InducedVertBreak",   # Break excluding gravity
+  "HorzBreak",          # Horizontal movement
+  "SpinRate",           # Raw spin
+  "SpinAxis",           # 0–360 spin axis
+  "RelHeight",          # Release height
+  "RelSide",            # Horizontal release side
+  "Extension",          # Distance toward plate
+  "VertApprAngle",      # Vertical approach angle
+  "HorzApprAngle",      # Horizontal approach angle
+  "VertRelAngle",       # Vertical release angle
+  "HorzRelAngle",       # Horizontal release angle
+  "Tilt",               # Spin tilt
+  "PlateLocHeight",     # Raw vertical location
+  "PlateLocSide",       # Raw horizontal location
+  "ZoneTime",           # Time to reach plate
+  "SpeedDrop"           # Velo loss from release to plate
+)
+
+main %>%
+  select(all_of(filtered_vars)) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
+  arrange(desc(na_count))
+
+main <- main %>%
+  drop_na(all_of(filtered_vars))
+
+main <- main %>%
+  arrange(UTCDateTime, PitchNo)
+```
+
+Let's just look at Fastballs for now
+
+```{r}
+main <- main %>%
+  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall" | TaggedPitchType == "OneSeamFastBall") %>%
+  select(1:50)
+cat("Number of rows:", nrow(main), "\n")
+```
+
+## Colnames
+
+```{r}
+colnames <- as.data.frame(cbind(indx = 1:length(colnames(main)), colnames = colnames(main)))
+colnames
+```
+
+
+## Model 1: xWhiff%
+
+### Filter out the swinging data
+
+```{r}
+# main %>%
+#   group_by(PitchCall) %>%
+#   summarise(count = n())
+
+main_swing <- main %>%
+  filter(PitchCall %in% c("StrikeCalled", "StrikeSwinging", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable", "InPlay"))
+
+main_swing %>%
+  group_by(PitchCall) %>%
+  summarise(count = n())
+```
+
+### Make the response variable: Whiff(1) Not Whiff(0)
+
+```{r}
+main_swing <- main_swing %>%
+  mutate(is_whiff = ifelse(PitchCall=="StrikeSwinging", 1, 0)) %>%
+  relocate(is_whiff, .after=PitchCall)
+```
+
+### EDA:
+
+```{r}
+ggplot(main_swing, aes(x=as.factor(is_whiff), fill=as.factor(is_whiff) )) + 
+  geom_bar( ) +
+  scale_fill_brewer(palette = "Set1") +
+  theme(legend.position="none")
+```
+
+So we see that approx ~1/8 of the swung at pitches were whiffs
+
+### Splitting Training and Test Data:
+
+```{r}
+set.seed(42)  # For reproducibility
+split_index <- sample(seq_len(nrow(main_swing)), size = 0.8 * nrow(main_swing))
+
+# Create training and testing datasets
+train_data <- main_swing[split_index, ]
+test_data <- main_swing[-split_index, ]
+```
+
+
+
