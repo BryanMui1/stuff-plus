@@ -50,20 +50,23 @@ To do: checklist
 - ~~Calculate basic stuff-plus~~
 - ~~Reformat data structures to suit stuff-plus models for all pitch types~~
 - ~~Look into different ways to train models~~
-- Reformat: partition data after applying normalization
-- EDA: Correlation matrix, pairs plots, check assumptions
+- ~~Reformat: partition data after applying normalization~~
 - spin axis normalization
 - Count normalization
 - induced vertical break normalization
 - approach angle normalization based on location
-- batter quality normalization
-- Fix the predictor criterion(CSW+)
+- EDA: Correlation matrix, pairs plots, check assumptions
+- Experiment with a new hybrid predictor criterion(xWhiff% and xHit+)
 
 
 Random ideas:
 
 - What if we trained a model that would predict ExitSpeed, Angle, Direction, HitSpinRate for even the ball pitches, 
 and if that model generalizes well with stuff to be able to impute hit characteristics for even the balls thrown? 
+- To add on the above point ^ if we trained a model using the data with hits to predict the contact, as well train a model 
+or in the same model to predict the percent chance for a swinging strike. Then we could interpolate the data for balls and non contact
+pitch calls, and use that as a response variable to calculate Stuff+. For actual hits/whiffs, we could just set the percentage chance to whiff 
+as 100% or use the real hit data. Somehow we would combine the two columns(Hit characteritics and P(Whiff)) to make a new hybrid statistic
 
     
     

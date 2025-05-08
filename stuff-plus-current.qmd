@@ -188,6 +188,28 @@ model_vars <- c(
 )
 ```
 
+## Spin Axis Normalization
+
+```{r}
+summary(main$SpinAxis)
+cat("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ \n")
+
+# we need to normalize spin axis because 359 degrees and 1 degrees are very close 
+
+# Convert SpinAxis to radians
+# Idea: convert the spin axis to a x and y unit circle direction
+main <- main %>%
+  mutate(
+    SpinAxis_rad = SpinAxis * pi / 180,
+    SpinAxis_sin = sin(SpinAxis_rad),
+    SpinAxis_cos = cos(SpinAxis_rad),
+  ) %>%
+  relocate(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos, .after=SpinAxis)
+
+summary(main %>% select(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos))
+```
+
+
 ## Supplementary Visualizations + EDA
 
 ### EDA
