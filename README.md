@@ -46,6 +46,12 @@ Ways to improve the model:
 5/1/25 Meeting Notes  
 Induced Vertical Break: Normalize by plate-location-height  
 Get the model results for Fastball and Sliders(Do some EDA, try to push for higher R-squared)  
+
+5/15/25
+Go through and remove not in play/ground outs/fly outs
+
+* See if filtering by base hits makes the dataset balanced to whiffs
+* Try to improve the AUC by either oversampling or changing models
     
 To do: checklist
 
@@ -59,6 +65,8 @@ To do: checklist
 - approach angle normalization based on location
 - EDA: Correlation matrix, pairs plots, check assumptions
 - Experiment with a new hybrid predictor criterion(xWhiff% and xHit+)
+
+
 
 
 Random ideas:
