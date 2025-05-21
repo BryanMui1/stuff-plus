@@ -1,0 +1,379 @@
+---
+title: "Response Engineering"
+format: pdf
+---
+
+# Spec
+
+The idea is to create a model that can interpolate for every row of data. 
+
+Given the hypothetical scenario that every pitch resulted in a swing, the model predicts the whiff%. We call this xWhiff%
+
+Given the hypothetical scenario that the pitch resulted in contact, the model predicts the characteristics of the hit(ExitSpeed, LaunchAngle, HitSpinRate, Direction), we can use those to calculate an expected hit quality score, or xHQ
+
+We'll train two models with the strike/hit data to see if any of these metrics are viable. If both metrics are viable, we can combine them to create a new hybrid pitch quality score, xhPQ
+
+# Packages:
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(xgboost)
+library(lubridate)
+library(ggplot2)
+library(ggcorrplot)
+library(GGally)
+library(pROC)
+library(caret)
+library(ROCR)
+library(viridis)
+library(glmnet)
+library(recipes)
+library(caret)
+library(yardstick)
+```
+
+# Read the csv:
+
+```{r}
+# Path-to-data, /data/datasets.csv
+ucla <- read_csv("./data/UCLA2023-2024.csv")
+penn <- read_csv("./data/PennState2024.csv")
+purdue <- read_csv("./data/Purdue2024.csv")
+michigan <- read_csv("./data/Michigan2024.csv")
+```
+
+## Binding Rows from the CSV files
+
+```{r}
+# Need to convert from character to date object
+ucla <- ucla %>%
+  mutate(Date = as.Date(Date)) %>%
+  mutate(UTCDate = as.Date(UTCDate)) %>%
+  mutate(AwayTeamForeignID = as.character(AwayTeamForeignID))
+
+# The data set that we will be mutating
+main <- bind_rows(ucla, penn, michigan, purdue)
+```
+
+
+## Clean the Data
+
+Drop NA's for the variables we will use
+```{r}
+filtered_vars <- c(
+  "Pitcher",
+  "PitcherId",
+  "TaggedPitchType",
+  "RelSpeed",           # Speed at release
+  "ZoneSpeed",          # Speed at the plate
+  "EffectiveVelo",      # Perceived pitch speed
+  "VertBreak",          # Full vertical break
+  "InducedVertBreak",   # Break excluding gravity
+  "HorzBreak",          # Horizontal movement
+  "SpinRate",           # Raw spin
+  "SpinAxis",           # 0–360 spin axis
+  "RelHeight",          # Release height
+  "RelSide",            # Horizontal release side
+  "Extension",          # Distance toward plate
+  "VertApprAngle",      # Vertical approach angle
+  "HorzApprAngle",      # Horizontal approach angle
+  "VertRelAngle",       # Vertical release angle
+  "HorzRelAngle",       # Horizontal release angle
+  "Tilt",               # Spin tilt
+  "PlateLocHeight",     # Raw vertical location
+  "PlateLocSide",       # Raw horizontal location
+  "ZoneTime",           # Time to reach plate
+  "SpeedDrop",           # Velo loss from release to plate
+  "Balls",
+  "Strikes",
+  "Outs",
+  "BatterSide"
+)
+
+main %>%
+  select(all_of(filtered_vars)) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
+  arrange(desc(na_count))
+
+main <- main %>%
+  drop_na(all_of(filtered_vars))
+
+main <- main %>%
+  arrange(UTCDateTime, PitchNo)
+```
+
+Retrieve Colnames
+```{r}
+colnames <- as.data.frame(cbind(indx = 1:length(colnames(main)), colnames = colnames(main)))
+colnames
+```
+
+Filter for only fastballs:
+```{r}
+main %>%
+  group_by(TaggedPitchType) %>%
+  summarise(count = n())
+
+main <- main %>%
+  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall" | TaggedPitchType == "OneSeamFastBall") %>%
+  select(1:50)
+cat("Number of rows in fastball:", nrow(main), "\n")
+```
+
+Filter out the swinging data
+```{r}
+main %>%
+  group_by(PitchCall) %>%
+  summarise(count = n())
+
+main_swing <- main %>%
+  filter(PitchCall %in% c("StrikeCalled", "StrikeSwinging", "InPlay", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable"))
+
+main_swing %>%
+  group_by(PitchCall) %>%
+  summarise(count = n())
+```
+
+
+# Normalize and Feature Engineering
+
+Make the response variable: Whiff(1) Not Whiff(0)
+```{r}
+main_swing <- main_swing %>%
+  mutate(is_whiff = ifelse(PitchCall=="StrikeSwinging", 1, 0)) %>%
+  relocate(is_whiff, .after=PitchCall)
+```
+
+Spin Axis Normalization
+```{r}
+summary(main$SpinAxis)
+cat("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ \n")
+
+# we need to normalize spin axis because 359 degrees and 1 degrees are very close 
+
+# Convert SpinAxis to radians
+# Idea: convert the spin axis to a x and y unit circle direction
+main_swing <- main_swing %>%
+  mutate(
+    SpinAxis_rad = SpinAxis * pi / 180,
+    SpinAxis_sin = sin(SpinAxis_rad),
+    SpinAxis_cos = cos(SpinAxis_rad),
+  ) %>%
+  relocate(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos, .after=SpinAxis)
+
+summary(main_swing %>% select(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos))
+```
+
+Batter Side : 1 is Right, 0 is Left
+```{r}
+main_swing <- main_swing %>%
+  mutate(
+    BatterSide = ifelse(BatterSide == "Right", 1, 0)
+  ) %>%
+  mutate(BatterSide = factor(BatterSide))
+
+summary(main_swing %>% select(BatterSide))
+```
+
+Count
+```{r}
+main_swing <- main_swing %>%
+  mutate(
+    Count = factor(paste0(Balls, "-", Strikes))
+  ) %>%
+  relocate(Count, .after=Strikes)
+```
+
+Outs
+```{r}
+main_swing <- main_swing %>%
+  mutate(Outs = factor(Outs))
+```
+
+Subset the Dataset:
+
+```{r}
+useful_vars <- c(
+  "is_whiff",
+  "Pitcher",
+  "PitcherId",
+  "TaggedPitchType",
+  "Count",
+  "Outs",
+  "BatterSide",
+  "RelSpeed",           # Speed at release
+  "ZoneSpeed",          # Speed at the plate
+  "EffectiveVelo",      # Perceived pitch speed
+  "VertBreak",          # Full vertical break
+  "InducedVertBreak",   # Break excluding gravity
+  "HorzBreak",          # Horizontal movement
+  "SpinRate",           # Raw spin
+  "SpinAxis",           # 0–360 spin axis
+  "SpinAxis_sin",
+  "SpinAxis_cos",
+  "RelHeight",          # Release height
+  "RelSide",            # Horizontal release side
+  "Extension",          # Distance toward plate
+  "VertApprAngle",      # Vertical approach angle
+  "HorzApprAngle",      # Horizontal approach angle
+  "VertRelAngle",       # Vertical release angle
+  "HorzRelAngle",       # Horizontal release angle
+  "PlateLocHeight",     # Raw vertical location
+  "PlateLocSide",       # Raw horizontal location
+  "ZoneTime",           # Time to reach plate
+  "SpeedDrop"           # Velo loss from release to plate
+)
+
+main_sw_filter <- main_swing %>%
+  select(any_of(useful_vars))
+```
+
+```{r}
+head(main_sw_filter)
+```
+
+
+# EDA:
+
+Looking at data set balance
+```{r}
+ggplot(main_swing, aes(x=as.factor(is_whiff), fill=as.factor(is_whiff) )) + 
+  geom_bar( ) +
+  scale_fill_brewer(palette = "Set1") +
+  theme(legend.position="none")
+
+main_sw_filter %>%
+  group_by(is_whiff) %>%
+  summarise(count = n())
+```
+
+So we see that approx ~1/8 of the swung at pitches were whiffs, which means the dataset might be imbalanced
+
+# Data Preprocessing Pipeline:
+
+```{r}
+model_df_vars <- c(
+  "is_whiff",
+  "RelSpeed",           # Speed at release
+  "VertBreak",          # Full vertical break
+  "HorzBreak",          # Horizontal movement
+  "SpinRate",           # Raw spin RPM
+  "SpinAxis_sin",
+  "SpinAxis_cos",
+  "RelHeight",          # Release height
+  "RelSide",            # Horizontal release side
+  "Extension",          # Distance toward plate
+  "VertApprAngle",      # Vertical approach angle
+  "HorzApprAngle",      # Horizontal approach angle
+  "VertRelAngle",       # Vertical release angle
+  "HorzRelAngle",       # Horizontal release angle
+  "Count", # Count as a factor string
+  "Outs", # 0-2
+  "BatterSide" # 1 - Right, 0 - Left
+)
+
+model_df <- main_sw_filter %>%
+  select(all_of(model_df_vars))
+
+head(model_df)
+```
+
+
+Normalize all numeric variables and apply one-hot encoding to the categorical ones:
+```{r}
+rec <- recipe(is_whiff ~ ., data = model_df) %>%
+  step_normalize(all_numeric_predictors()) %>%     # Normalize (center & scale)
+  step_dummy(all_nominal_predictors())             # One-hot encode all factors
+
+rec_prepped <- prep(rec)
+
+model_df_transformed <- bake(rec_prepped, new_data = NULL)
+```
+
+```{r}
+head(model_df_transformed)
+
+# Sanitty check for NA values
+model_df_transformed %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
+  arrange(desc(na_count))
+```
+
+
+# Splitting Training and Test Data:
+
+```{r}
+set.seed(42)
+split_index <- sample(seq_len(nrow(main_swing)), size = 0.8 * nrow(main_swing))
+
+# Create training and testing datasets
+train_data <- model_df_transformed[split_index, ]
+test_data <- model_df_transformed[-split_index, ]
+
+dim(train_data)
+dim(test_data)
+```
+
+# Train the Models
+
+Normal Logistic Regression
+```{r}
+# Model Vars:
+m1 <- glm(is_whiff ~ ., data = train_data, family = binomial())
+summary(m1)
+```
+
+Plotting the ROC curve and calculating the AUC:
+```{r}
+test_X <- test_data %>% select(-is_whiff)
+
+pred <- as.numeric(predict(m1, test_X))
+pred_probs <- as.numeric(1 / (1 + exp(-pred)))
+true_labels <- as.numeric(test_data$is_whiff)
+
+# Calc ROC
+pred <- prediction(pred_probs, true_labels)
+perf_m <- performance(pred, "tpr", "fpr")
+
+# Calc AUC
+auc <- performance(pred, "auc")
+auc_value <- auc@y.values[[1]]
+cat("Logistic Regression AUC =", auc_value, "\n")
+
+# Plot the Curve
+plot(perf_m, 
+     colorize = TRUE, 
+     colorkey.label = "Cutoff",
+     main = "ROC Curve Logistic Regression(Whiff Prediction)")
+abline(a = 0, b = 1, lty = 2, col = "black")
+```
+
+Confusion Matrix:
+```{r}
+# Convert probabilities to binary class predictions
+pred_classes <- factor(ifelse(pred_probs > 0.5, 1, 0))
+true_classes <- factor(true_labels)
+
+# Caret Confusion Matrix
+conf_matrix <- caret::confusionMatrix(data = pred_classes, reference = true_classes)
+print(conf_matrix)
+```
+
+```{r}
+# Compute confusion matrix and plot
+results <- tibble(
+  truth = true_classes,
+  prediction = pred_classes
+)
+
+cm <- conf_mat(data = results, truth = truth, estimate = prediction)
+
+autoplot(cm, type = "heatmap") +
+  scale_fill_viridis_c(option = "D", begin = 0.1, end = 0.9) +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  labs(title = "Confusion Matrix: Normal Logistic Regression", fill = "Count")
+```
+
