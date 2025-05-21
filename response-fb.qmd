@@ -192,7 +192,6 @@ main_swing <- main_swing %>%
 ```
 
 Subset the Dataset:
-
 ```{r}
 useful_vars <- c(
   "is_whiff",
@@ -280,7 +279,7 @@ head(model_df)
 ```
 
 
-Normalize all numeric variables and apply one-hot encoding to the categorical ones:
+Scale all numeric variables and apply one-hot encoding to the categorical ones:
 ```{r}
 rec <- recipe(is_whiff ~ ., data = model_df) %>%
   step_normalize(all_numeric_predictors()) %>%     # Normalize (center & scale)
@@ -318,9 +317,9 @@ dim(test_data)
 
 # Train the Models
 
-Normal Logistic Regression
+## Normal Logistic Regression
+
 ```{r}
-# Model Vars:
 m1 <- glm(is_whiff ~ ., data = train_data, family = binomial())
 summary(m1)
 ```
@@ -346,7 +345,7 @@ cat("Logistic Regression AUC =", auc_value, "\n")
 plot(perf_m, 
      colorize = TRUE, 
      colorkey.label = "Cutoff",
-     main = "ROC Curve Logistic Regression(Whiff Prediction)")
+     main = "ROC Curve: Normal Logistic Regression(xWhiff)")
 abline(a = 0, b = 1, lty = 2, col = "black")
 ```
 
@@ -374,6 +373,74 @@ autoplot(cm, type = "heatmap") +
   scale_fill_viridis_c(option = "D", begin = 0.1, end = 0.9) +
   theme_minimal() +
   theme(legend.position = "right") +
-  labs(title = "Confusion Matrix: Normal Logistic Regression", fill = "Count")
+  labs(title = "Confusion Matrix: Normal Logistic Regression(xWhiff)", fill = "Count")
 ```
 
+## LASSO Logistic Regression
+
+```{r}
+# Prepare data
+x <- model.matrix(is_whiff ~ ., train_data)[, -1]  # Remove intercept
+y <- train_data$is_whiff
+
+# Fit LASSO
+cv_lasso <- cv.glmnet(x, y, alpha = 1, family = "binomial")  # LASSO
+plot(cv_lasso)
+
+# Get best lambda
+best_lambda <- cv_lasso$lambda.min
+cat("Best Lambda:", best_lambda, "\n")
+
+# Refit final model at best lambda
+m2 <- glmnet(x, y, alpha = 1, lambda = best_lambda, family = "binomial")
+coef(m2)
+```
+
+Plotting the ROC curve and calculating the AUC:
+```{r}
+x_test <- model.matrix(is_whiff ~ ., data = test_data)[, -1]
+pred_probs <- predict(m2, newx = x_test, s = best_lambda, type = "response")
+true_labels <- as.numeric(test_data$is_whiff)
+
+# Calc ROC
+pred <- prediction(pred_probs, true_labels)
+perf_m <- performance(pred, "tpr", "fpr")
+
+# Calc AUC
+auc <- performance(pred, "auc")
+auc_value <- auc@y.values[[1]]
+cat("Logistic Regression w/ Lasso AUC =", auc_value, "\n")
+
+# Plot the Curve
+plot(perf_m, 
+     colorize = TRUE, 
+     colorkey.label = "Cutoff",
+     main = "ROC Curve: Logistic Regression w/ Lasso Regularization(xWhiff)")
+abline(a = 0, b = 1, lty = 2, col = "black")
+```
+
+Confusion Matrix:
+```{r}
+# Convert probabilities to binary class predictions
+pred_classes <- factor(ifelse(pred_probs > 0.5, 1, 0))
+true_classes <- factor(true_labels)
+
+# Caret Confusion Matrix
+conf_matrix <- caret::confusionMatrix(data = pred_classes, reference = true_classes)
+print(conf_matrix)
+```
+```{r}
+# Compute confusion matrix and plot
+results <- tibble(
+  truth = true_classes,
+  prediction = pred_classes
+)
+
+cm <- conf_mat(data = results, truth = truth, estimate = prediction)
+
+autoplot(cm, type = "heatmap") +
+  scale_fill_viridis_c(option = "D", begin = 0.1, end = 0.9) +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  labs(title = "Confusion Matrix: Normal Logistic Regression(xWhiff)", fill = "Count")
+```

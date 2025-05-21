@@ -1,0 +1,399 @@
+---
+title: "Pure Stuff"
+format: pdf
+---
+
+## Pckg
+
+```{r packages, include=FALSE}
+library(tidyverse)
+library(xgboost)
+library(lubridate)
+library(ggplot2)
+library(ggcorrplot)
+library(GGally)
+```
+
+Read the csv:
+
+```{r}
+# Path-to-data, /data/datasets.csv
+data_original <- read_csv("/Users/willwhitis/bryan/stuffdata.csv")
+# The data set that we will be mutating
+main <- data_original
+```
+
+## Colnames
+
+```{r}
+colnames <- as.data.frame(cbind(indx = 1:length(colnames(main)), colnames = colnames(main)))
+```
+
+
+## Clean the Data
+
+```{r}
+filtered_vars <- c(
+  "Pitcher",
+  "PitcherId",
+  "TaggedPitchType",
+  "RelSpeed",           # Speed at release
+  "ZoneSpeed",          # Speed at the plate
+  "EffectiveVelo",      # Perceived pitch speed
+  "VertBreak",          # Full vertical break
+  "InducedVertBreak",   # Break excluding gravity
+  "HorzBreak",          # Horizontal movement
+  "SpinRate",           # Raw spin
+  "SpinAxis",           # 0–360 spin axis
+  "RelHeight",          # Release height
+  "RelSide",            # Horizontal release side
+  "Extension",          # Distance toward plate
+  "VertApprAngle",      # Vertical approach angle
+  "HorzApprAngle",      # Horizontal approach angle
+  "VertRelAngle",       # Vertical release angle
+  "HorzRelAngle",       # Horizontal release angle
+  "Tilt",               # Spin tilt
+  "PlateLocHeight",     # Raw vertical location
+  "PlateLocSide",       # Raw horizontal location
+  "ZoneTime",           # Time to reach plate
+  "SpeedDrop"           # Velo loss from release to plate
+)
+
+main %>%
+  select(all_of(filtered_vars)) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
+  arrange(desc(na_count))
+
+main <- main %>%
+  drop_na(all_of(filtered_vars))
+
+main <- main %>%
+  arrange(UTCDateTime, PitchNo)
+```
+
+
+
+## Response Var: CSW+ Play Outcome
+
+### Hit Quality + Play Outcome Hybrid Metric
+
+Considering modifying this because it likely has too much situational context that can't be predicted by a pitcher's stuff
+Want to change to xba
+
+```{r}
+# Continuous function to calculate pitch quality score
+# Maps contact quality from 0 (perfect contact) to 1 (whiff)
+hybrid_quality <- function(PitchCall, PlayResult, ExitSpeed = NA, Angle = NA, Direction = NA) {
+  # Base score from pitch/plate appearance outcome
+  library(dplyr)
+  callvalues <- main %>%
+  mutate(Top_Bottom = as.factor(Top_Bottom)) %>%
+  arrange(GameID, Inning, Top_Bottom, PAofInning) %>%
+  group_by(GameID, Inning, Top_Bottom) %>%
+  mutate(runs_this_inning = cumsum(RunsScored)) %>%
+  ungroup() %>%
+  select(PitchCall, PlayResult, GameID, Inning, Top_Bottom, PAofInning, RunsScored, runs_this_inning) %>%
+  arrange(GameID, Inning, Top_Bottom, PAofInning)
+ 
+  # Step 1: Build the PitchCall values
+pitch_vals <- callvalues %>%
+  filter(!is.na(PitchCall)) %>%
+  group_by(PitchCall) %>%
+  summarise(run_value = mean(runs_this_inning, na.rm = TRUE), .groups = "drop") %>%
+  rename(Outcome = PitchCall)
+
+# Step 2: Run value by PlayResult
+play_vals <- callvalues %>%
+  filter(!is.na(PlayResult)) %>%
+  group_by(PlayResult) %>%
+  summarise(run_value = mean(runs_this_inning, na.rm = TRUE), .groups = "drop") %>%
+  rename(Outcome = PlayResult)
+
+# Step 3: Combine both
+all_run_values <- bind_rows(pitch_vals, play_vals) %>%
+  arrange(desc(run_value))
+    
+  
+ base_score <- case_when(
+    PlayResult == "HomeRun" ~ 0,
+    PitchCall %in% c("BallCalled", "BallIntentional", "BallinDirt", "HitByPitch", "Undefined") ~ 0.2,
+    PitchCall %in% c("InPlay") ~ 0.3,
+    PitchCall %in% c("FoulBall", "FoulBallFieldable", "FoulBallNotFieldable") ~ 0.5,
+    PitchCall == "StrikeCalled" ~ 0.8,
+    PitchCall == "StrikeSwinging" ~ 1,
+    TRUE ~ 0.4)
+  # Logical vector for rows with full batted-ball data
+  has_contact_data <- !is.na(main$ExitSpeed) & !is.na(main$Angle)
+ 
+  #Create barrel model to rate contact
+  main <- main %>%
+  mutate(
+    is_xb_hit = PlayResult %in% c("Double", "Triple", "HomeRun")) 
+ 
+  barrel_model <- glm(
+  is_xb_hit ~ ExitSpeed + Angle + I(Angle^2),
+  data = main[has_contact_data,],
+  family = binomial(link = "logit")
+)
+
+# Add predicted xBA to data
+  main <- main[has_contact_data,] %>%
+  mutate(xba = predict(barrel_model, type = "response"))
+
+}
+```
+
+### Rolling CSW+ Called Strikes Plus Whiffs% 
+
+Consider using this to train the model because it has a better distribution.
+
+Make the data rolling so no data points get leaked to the model
+
+```{r}
+# Pitcher gets a special weight bonus if they have high CSW%, if they have low CSW% they get a penalty
+csw <- main %>%
+  group_by(Pitcher) %>%
+  summarise(
+    csw = mean(PitchCall %in% c("StrikeCalled", "StrikeSwinging")),
+    .groups = "drop"
+  )
+csw
+
+# Calculate CSW%, but only after a pitcher has recorded > 10 pitches
+main <- main %>%
+  mutate(
+    is_csw = PitchCall %in% c("StrikeCalled", "StrikeSwinging"),
+    pitch_index = row_number(),
+    csw_league = lag(cumsum(is_csw) / pitch_index, default = 0)  # rolling league CSW%
+  ) %>%
+  group_by(Pitcher) %>%
+  mutate(
+    pitcher_n = row_number(),  # per-pitcher index
+    csw_p = lag(cumsum(is_csw) / pitcher_n, default = 0),        # rolling CSW% for pitcher
+    csw_p = if_else(pitcher_n < 10, 0, csw_p)                     # apply 10-pitch min
+  ) %>%
+  ungroup() %>%
+  mutate(
+    csw_league = if_else(pitch_index < 1000, mean(main$is_csw[1:1000]), csw_league)         # apply 20-pitch min for league CSW
+  ) %>%
+  relocate(pitch_index, pitcher_n, .before = PitchNo) %>%
+  relocate(csw_p, csw_league, .after = PitchCall)
+```
+
+### Append Metrics to data 
+
+```{r}
+csw_weight_factor <- 0.25 # controls the weight factor for CSW for pitchers
+
+main <- main %>%
+  mutate(
+    csw_diff = csw_p - csw_league, 
+    hybrid_quality = hybrid_quality(PitchCall, PlayResult, ExitSpeed, Angle, Direction),
+    hybrid_weighted = if_else(
+      csw_p == 0 | csw_league == 0,  # early pitchers — don't modify
+      hybrid_quality,
+      hybrid_quality * (1 + csw_weight_factor * csw_diff)),
+    hybrid_weighted = pmin(pmax(hybrid_weighted, 0), 1)
+    ) %>% 
+  relocate(hybrid_quality, hybrid_weighted, .after = PitchCall)
+```
+
+
+## Apply Normalizations
+
+### Model Vars
+
+Model Variables used to predict the response, feel free to change
+
+```{r}
+model_vars <- c(
+  # Physical pitch characteristics
+  "RelSpeed", "ZoneSpeed", "EffectiveVelo",
+  "VertBreak", "InducedVertBreak", "HorzBreak",
+  "SpinRate", "SpinAxis",
+  "RelHeight", "RelSide", "Extension",
+  "VertApprAngle", "HorzApprAngle",
+  "VertRelAngle", "HorzRelAngle",
+  "PlateLocHeight", "PlateLocSide",
+  "ZoneTime", "SpeedDrop"
+)
+```
+
+### Spin Axis Normalization
+
+```{r}
+summary(main$SpinAxis)
+cat("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ \n")
+
+# we need to normalize spin axis because 359 degrees and 1 degrees are very close 
+
+# Convert SpinAxis to radians
+# Idea: convert the spin axis to a x and y unit circle direction
+main <- main %>%
+  mutate(
+    SpinAxis_rad = SpinAxis * pi / 180,
+    SpinAxis_sin = sin(SpinAxis_rad),
+    SpinAxis_cos = cos(SpinAxis_rad),
+  ) %>%
+  relocate(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos, .after=SpinAxis)
+
+summary(main %>% select(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos))
+```
+
+### Count Normalization
+
+### Induced Vertical Break Normalization
+
+### Approach Angle Normalization Based on Location
+
+### Normalize the ranges of the rest of the variables 
+
+
+## Supplementary Visualizations + EDA
+
+### Partiitoning the Data by Pitch Type
+
+```{r}
+# Now to partition separate datasets for all the pitch types
+# main %>% 
+#   group_by(TaggedPitchType) %>%
+#   summarise(count = n())
+
+data_partitioned <- list()
+
+data_partitioned[["Fastball"]] <- main %>%
+  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall" | TaggedPitchType == "OneSeamFastBall")
+data_partitioned[["Curveball"]] <- main %>%
+  filter(TaggedPitchType == "Curveball")
+data_partitioned[["Slider"]] <- main %>%
+  filter(TaggedPitchType == "Slider")
+data_partitioned[["ChangeUp"]] <- main %>%
+  filter(TaggedPitchType == "ChangeUp")
+data_partitioned[["Sinker"]] <- main %>%
+  filter(TaggedPitchType == "Sinker")
+
+
+for(i in attr(data_partitioned, "names")) {
+  cat(i, ": ", nrow(data_partitioned[[i]]), " observations \n", sep="")
+}
+```
+
+
+### EDA
+
+Correlation Matrix 
+
+```{r}
+#| fig-width: 20
+#| fig-align: center
+#| fig-fullwidth: true
+
+cor_vars <- c(
+  # Physical pitch characteristics
+  "RelSpeed", "ZoneSpeed", "EffectiveVelo",
+  "VertBreak", "InducedVertBreak", "HorzBreak",
+  "SpinRate", "SpinAxis",
+  "SpinAxis_sin", "SpinAxis_cos", 
+  "RelHeight", "RelSide", "Extension",
+  "VertApprAngle", "HorzApprAngle",
+  "VertRelAngle", "HorzRelAngle",
+  "PlateLocHeight", "PlateLocSide",
+  "ZoneTime", "SpeedDrop",
+  "hybrid_quality", "csw_p"
+)
+
+model_vars_data <- main %>%
+  select(all_of(cor_vars))
+
+cor_matrix <- cor(model_vars_data, use = "complete.obs")
+
+# pairs(model_vars_data)
+ggcorrplot(cor_matrix, hc.order = FALSE, type = "upper",
+   lab = TRUE)
+```
+
+As we can see, the correlation matrix shows that our response vars (Rolling CSW% and Hybrid) are pretty bad. Will need to update later if we want a chance of a model with high predictive accuracy 
+
+Plotting pairs 
+
+```{r}
+# ggpairs(model_vars_data, columns = c("hybrid_quality", "csw_p", 
+#   "ZoneSpeed", "InducedVertBreak", 
+#   "HorzBreak", "SpinAxis_sin", "SpinAxis_cos", 
+#   "RelHeight", "RelSide", "Extension",
+#   "VertApprAngle", "HorzApprAngle",
+#   "VertRelAngle", "HorzRelAngle",
+#   "PlateLocHeight", "PlateLocSide"))
+ggpairs(model_vars_data, columns = c("hybrid_quality", "csw_p",
+  "ZoneSpeed", "InducedVertBreak",
+  "HorzBreak", "SpinAxis_sin", "SpinAxis_cos"))
+```
+
+### Misc Visualizations
+
+Density Distribution of the Response Variables:
+
+```{r}
+ggplot(main, aes(x = hybrid_weighted)) +
+  geom_density(fill = "steelblue", alpha = 0.6) +
+  labs(
+    title = "Density of Weighted Pitch Quality",
+    x = "Weighted Pitch Quality",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+ggplot(main, aes(x = csw_p)) +
+  geom_density(fill = "blue", alpha = 0.6) +
+  labs(
+    title = "Density of Rolling CSW%",
+    x = "CSW%",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+
+
+```{r}
+colnames <- as.data.frame(cbind(indx = 1:length(colnames(main)), colnames = colnames(main)))
+```
+
+
+## Training Models
+
+
+Training Models
+
+```{r}
+# get the LM equation formatted
+# Model vars is towards the beginning of this notebook, in the data cleaning section
+equation <- paste("hybrid_weighted ~ ", paste(model_vars, collapse = " + "))
+# print(equation)
+
+# fit the model, predict stuff+ and standardize to 100
+lms <- list()
+stuff_plus <- list()
+for(i in attr(data_partitioned, "names")) {
+  cat(i, "Model: \n")
+  lms[[i]] <- lm(formula(equation), data = data_partitioned[[i]])
+  print(summary(lms[[i]]))
+  cat("-------------------------------------------------------------------------------------\n")
+  stuff_plus[[i]] <- data_partitioned[[i]] %>%
+    mutate(
+      raw_stuff = predict(lms[[i]], newdata = .),
+      StuffPlus = 100 * raw_stuff / mean(raw_stuff, na.rm = TRUE)
+    )
+}
+```
+
+```{r}
+main %>%
+  select(model_vars) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
+  arrange(desc(na_count))
+
+```
+
