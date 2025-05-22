@@ -444,3 +444,4 @@ autoplot(cm, type = "heatmap") +
   theme(legend.position = "right") +
   labs(title = "Confusion Matrix: Normal Logistic Regression(xWhiff)", fill = "Count")
 ```
+
