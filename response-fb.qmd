@@ -30,6 +30,7 @@ library(glmnet)
 library(recipes)
 library(caret)
 library(yardstick)
+library(Matrix)
 ```
 
 # Read the csv:
@@ -83,7 +84,7 @@ filtered_vars <- c(
   "PlateLocHeight",     # Raw vertical location
   "PlateLocSide",       # Raw horizontal location
   "ZoneTime",           # Time to reach plate
-  "SpeedDrop",           # Velo loss from release to plate
+  "SpeedDrop",          # Velo loss from release to plate
   "Balls",
   "Strikes",
   "Outs",
@@ -191,6 +192,40 @@ main_swing <- main_swing %>%
   mutate(Outs = factor(Outs))
 ```
 
+InducedVertBreak normalization by Release height:
+
+* Needs to be normalized because higher/lower arm slots affect your induced break number 
+* Isolation of InducedVertBreak regardless of the pitcher's arm slot
+
+```{r}
+# Using Residual Normalization
+
+# Subset the data
+ivb_df <- main_swing %>%
+  select(InducedVertBreak, RelHeight, RelSide)
+
+# Scale the vars
+rec <- recipe(InducedVertBreak ~ ., data = ivb_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+
+rec_prepped <- prep(rec)
+
+ivb_df_std <- bake(rec_prepped, new_data = NULL)
+
+# ivb_m <- lm()
+```
+
+
+HorzBreak normalization
+by Release side; needs to be normalized because arm slot 
+
+Spin rate normalization  
+by relspeed
+
+Vert/Horz Approach angle normalization  
+
+Vert/Horz release angle normalization  
+
 Subset the Dataset:
 ```{r}
 useful_vars <- c(
@@ -253,7 +288,7 @@ So we see that approx ~1/8 of the swung at pitches were whiffs, which means the 
 
 ```{r}
 model_df_vars <- c(
-  "is_whiff",
+  "is_whiff",           # 0 - Whiff, 1 - Not Whiff
   "RelSpeed",           # Speed at release
   "InducedVertBreak",   # vertical break induced by pitcher
   "HorzBreak",          # Horizontal movement
@@ -267,9 +302,9 @@ model_df_vars <- c(
   "HorzApprAngle",      # Horizontal approach angle
   "VertRelAngle",       # Vertical release angle
   "HorzRelAngle",       # Horizontal release angle
-  "Count", # Count as a factor string
-  "Outs", # 0-2
-  "BatterSide" # 1 - Right, 0 - Left
+  "Count",              # Count as a factor string
+  "Outs",               # 0-2
+  "BatterSide"          # 1 - Right, 0 - Left
 )
 
 model_df <- main_sw_filter %>%
@@ -289,6 +324,7 @@ rec_prepped <- prep(rec)
 
 model_df_transformed <- bake(rec_prepped, new_data = NULL)
 ```
+
 
 ```{r}
 head(model_df_transformed)

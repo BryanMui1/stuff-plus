@@ -64,7 +64,7 @@ To do: checklist
 - induced vertical break normalization
 - approach angle normalization based on location(all pitches should be normalized like they hit the middle of the zone)
 - strike zone normalization based on plate_loc height and plate_loc side
-- Fit XGboost
+- Fit XGboost model
 - EDA: Correlation matrix, pairs plots, check assumptions
 
 Random ideas:
