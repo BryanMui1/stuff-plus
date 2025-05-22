@@ -256,11 +256,11 @@ So we see that approx ~1/8 of the swung at pitches were whiffs, which means the 
 model_df_vars <- c(
   "is_whiff",
   "RelSpeed",           # Speed at release
-  "VertBreak",          # Full vertical break
+  "InducedVertBreak",   # vertical break induced by pitcher
   "HorzBreak",          # Horizontal movement
   "SpinRate",           # Raw spin RPM
-  "SpinAxis_sin",
-  "SpinAxis_cos",
+  "SpinAxis_sin",       # Spin axis sin component
+  "SpinAxis_cos",       # Spin axis cos component
   "RelHeight",          # Release height
   "RelSide",            # Horizontal release side
   "Extension",          # Distance toward plate

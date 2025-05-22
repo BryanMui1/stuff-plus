@@ -60,14 +60,12 @@ To do: checklist
 - ~~Look into different ways to train models~~
 - ~~Reformat: partition data after applying normalization~~
 - ~~spin axis normalization~~
-- Count normalization
+- ~~Count normalization~~
 - induced vertical break normalization
-- approach angle normalization based on location
+- approach angle normalization based on location(all pitches should be normalized like they hit the middle of the zone)
+- strike zone normalization based on plate_loc height and plate_loc side
+- Fit XGboost
 - EDA: Correlation matrix, pairs plots, check assumptions
-- Experiment with a new hybrid predictor criterion(xWhiff% and xHit+)
-
-
-
 
 Random ideas:
 
