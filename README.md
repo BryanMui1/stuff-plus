@@ -52,6 +52,11 @@ Go through and remove not in play/ground outs/fly outs
 
 * See if filtering by base hits makes the dataset balanced to whiffs
 * Try to improve the AUC by either oversampling or changing models
+
+5/22/25
+
+* Normalize ApproachAngle(Plate loc height, Rel height), HorzApproachAngle (Rel Side, Plate Loc side)
+* Normalize SpinAxis, Rel side for lefties
     
 To do: checklist
 

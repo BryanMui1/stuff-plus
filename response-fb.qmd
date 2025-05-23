@@ -31,6 +31,8 @@ library(recipes)
 library(caret)
 library(yardstick)
 library(Matrix)
+library(mgcv)
+library(hrbrthemes)
 ```
 
 # Read the csv:
@@ -196,23 +198,94 @@ InducedVertBreak normalization by Release height:
 
 * Needs to be normalized because higher/lower arm slots affect your induced break number 
 * Isolation of InducedVertBreak regardless of the pitcher's arm slot
+* TODO: Switch Release Side for Vertical Zone location
 
+Model 1: Linear
 ```{r}
 # Using Residual Normalization
 
 # Subset the data
 ivb_df <- main_swing %>%
-  select(InducedVertBreak, RelHeight, RelSide)
+  select(VertApprAngle, RelHeight, PlateLocHeight, is_whiff) %>%
+  mutate(is_whiff = as.factor(is_whiff))
 
 # Scale the vars
-rec <- recipe(InducedVertBreak ~ ., data = ivb_df) %>%
+rec <- recipe(VertApprAngle ~ ., data = ivb_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-
 rec_prepped <- prep(rec)
-
 ivb_df_std <- bake(rec_prepped, new_data = NULL)
 
-# ivb_m <- lm()
+# Plot pairs
+ggp <- ggpairs(ivb_df_std,
+        cols = 1:3,
+        aes(color = as.factor(is_whiff),
+        alpha = 0.5),
+        progress = F)
+
+# Fit the model
+ivb_df_model <- ivb_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
+ivb_m <- lm(VertApprAngle ~ ., data = ivb_df_model)
+summary(ivb_m)
+
+summary(ivb_df_std)
+
+print(ggp)
+```
+
+Model 2: GAM(Generalized Additive Model)
+```{r}
+ivb_gam <- gam(InducedVertBreak ~ RelHeight + s(RelSide), data = ivb_df_model)
+
+summary(ivb_gam)
+plot(ivb_gam, pages = 1)
+
+ivb_normalized <- ivb_gam$residuals
+
+main_swing$InducedVertBreak_n <- ivb_gam$residuals
+
+ggplot(data = main_swing, aes(x=InducedVertBreak_n)) +
+  geom_density(fill="#69b3a2", color="#e9ecef", alpha=0.8) +
+  ggtitle("Normalized Induced Vert Break") +
+  theme_ipsum()
+```
+
+Model 3: XGBoost
+```{r}
+X <- as.matrix(ivb_df_model %>% select(RelHeight, RelSide))
+y <- as.numeric(ivb_df_model$InducedVertBreak)
+
+# train_control <- trainControl(
+#   method = "cv",          # Cross-validation
+#   number = 5,             # 5-fold cross-validation
+#   search = "grid",        # Use grid search
+#   verboseIter = TRUE      # Print progress during training
+# )
+# 
+# tune_grid <- expand.grid(
+#   nrounds = c(50, 100, 150),         # Number of boosting rounds
+#   max_depth = c(3, 6, 9),            # Maximum depth of trees
+#   eta = c(0.01, 0.1, 0.3),           # Learning rate
+#   gamma = c(0, 1, 5),                # Minimum loss reduction
+#   colsample_bytree = c(0.5, 0.7, 1), # Fraction of features for each tree
+#   min_child_weight = c(1, 3, 5),     # Minimum sum of instance weight
+#   subsample = c(0.6, 0.8, 1)         # Fraction of samples used for training
+# )
+# 
+# model <- train(
+#   x = X,                       # Feature matrix
+#   y = y,                       # Target vector
+#   method = "xgbTree",                # XGBoost tree model
+#   trControl = train_control,         # Cross-validation settings
+#   tuneGrid = tune_grid,              # Parameter grid
+#   metric = "RMSE"                    # Metric to optimize (you can change to "Rsquared" for R²)
+# )
+
+#print(model)
+               
+
+ivb_xgb <- xgboost(data = X, label = y, nrounds = 100)
+preds <- predict(ivb_xgb, newdata = X)
+postResample(preds, y)
 ```
 
 
@@ -222,7 +295,7 @@ by Release side; needs to be normalized because arm slot
 Spin rate normalization  
 by relspeed
 
-Vert/Horz Approach angle normalization  
+Vert/Horz Approach angle normalization by rel height, zone location
 
 Vert/Horz release angle normalization  
 
@@ -241,6 +314,7 @@ useful_vars <- c(
   "EffectiveVelo",      # Perceived pitch speed
   "VertBreak",          # Full vertical break
   "InducedVertBreak",   # Break excluding gravity
+  "InducedVertBreak_n",   # Break excluding gravity, normalized to RelHeight and RelSide
   "HorzBreak",          # Horizontal movement
   "SpinRate",           # Raw spin
   "SpinAxis",           # 0–360 spin axis
@@ -290,7 +364,7 @@ So we see that approx ~1/8 of the swung at pitches were whiffs, which means the 
 model_df_vars <- c(
   "is_whiff",           # 0 - Whiff, 1 - Not Whiff
   "RelSpeed",           # Speed at release
-  "InducedVertBreak",   # vertical break induced by pitcher
+  "InducedVertBreak_n", # vertical break induced by pitcher
   "HorzBreak",          # Horizontal movement
   "SpinRate",           # Raw spin RPM
   "SpinAxis_sin",       # Spin axis sin component
@@ -311,6 +385,8 @@ model_df <- main_sw_filter %>%
   select(all_of(model_df_vars))
 
 head(model_df)
+
+summary(model_df)
 ```
 
 
@@ -353,7 +429,7 @@ dim(test_data)
 
 # Train the Models
 
-## Normal Logistic Regression
+## Model 1: Normal Logistic Regression
 
 ```{r}
 m1 <- glm(is_whiff ~ ., data = train_data, family = binomial())
@@ -412,7 +488,7 @@ autoplot(cm, type = "heatmap") +
   labs(title = "Confusion Matrix: Normal Logistic Regression(xWhiff)", fill = "Count")
 ```
 
-## LASSO Logistic Regression
+## Model 2: LASSO Logistic Regression
 
 ```{r}
 # Prepare data
@@ -481,3 +557,57 @@ autoplot(cm, type = "heatmap") +
   labs(title = "Confusion Matrix: Normal Logistic Regression(xWhiff)", fill = "Count")
 ```
 
+## Model 3: XGBoost
+```{r}
+X_train <- as.matrix(train_data %>% select(-is_whiff))
+y_train <- as.matrix(train_data$is_whiff)
+
+xgb <- xgboost(data = X_train, label = y_train, nrounds = 150)
+
+X_test <- as.matrix(test_data %>% select(-is_whiff))
+y_test <- as.matrix(test_data$is_whiff)
+```
+
+Metrics:
+```{r}
+pred_probs <- predict(xgb, newdata = X_test)
+postResample(preds, y_test)
+
+# Calc ROC
+pred <- prediction(pred_probs, y_test)
+perf_m <- performance(pred, "tpr", "fpr")
+
+# Calc AUC
+auc <- performance(pred, "auc")
+auc_value <- auc@y.values[[1]]
+cat("XGBoost AUC =", auc_value, "\n")
+
+# Plot the ROC Curve
+plot(perf_m,
+     colorize = TRUE,
+     colorkey.label = "Cutoff",
+     main = "ROC Curve: Logistic Regression w/ Lasso Regularization(xWhiff)")
+abline(a = 0, b = 1, lty = 2, col = "black")
+
+# Convert probabilities to binary class predictions
+pred_classes <- factor(ifelse(pred_probs > 0.5, 1, 0))
+true_classes <- factor(true_labels)
+
+# Caret Confusion Matrix
+conf_matrix <- caret::confusionMatrix(data = pred_classes, reference = true_classes)
+print(conf_matrix)
+
+# Compute confusion matrix and plot
+results <- tibble(
+  truth = true_classes,
+  prediction = pred_classes
+)
+
+cm <- conf_mat(data = results, truth = truth, estimate = prediction)
+
+autoplot(cm, type = "heatmap") +
+  scale_fill_viridis_c(option = "D", begin = 0.1, end = 0.9) +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  labs(title = "Confusion Matrix: Normal Logistic Regression(xWhiff)", fill = "Count")
+```
