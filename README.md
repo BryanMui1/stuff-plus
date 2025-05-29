@@ -60,17 +60,12 @@ Go through and remove not in play/ground outs/fly outs
     
 To do: checklist
 
-- ~~Calculate basic stuff-plus~~
-- ~~Reformat data structures to suit stuff-plus models for all pitch types~~
-- ~~Look into different ways to train models~~
-- ~~Reformat: partition data after applying normalization~~
-- ~~spin axis normalization~~
-- ~~Count normalization~~
-- induced vertical break normalization
-- approach angle normalization based on location(all pitches should be normalized like they hit the middle of the zone)
+- Keep Vertical, HorzBreak, SpinRate, RelHeight unmodified
+- Normalize ApproachAngle(Plate loc height, Rel height), HorzApproachAngle (Rel Side, Plate Loc side)
+- Flip Relside(normalize lefties & righties)
 - strike zone normalization based on plate_loc height and plate_loc side
-- Fit XGboost model
-- EDA: Correlation matrix, pairs plots, check assumptions
+- Make data cleaning pipeline, one for pitching data, the other for hitting data
+- Start trying models
 
 Random ideas:
 

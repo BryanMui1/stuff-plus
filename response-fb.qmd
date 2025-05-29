@@ -33,6 +33,8 @@ library(yardstick)
 library(Matrix)
 library(mgcv)
 library(hrbrthemes)
+
+set.seed(42)
 ```
 
 # Read the csv:
@@ -138,6 +140,12 @@ main_swing %>%
   summarise(count = n())
 ```
 
+# Peek the data
+
+```{r}
+summary(main_swing)
+```
+
 
 # Normalize and Feature Engineering
 
@@ -194,110 +202,194 @@ main_swing <- main_swing %>%
   mutate(Outs = factor(Outs))
 ```
 
-InducedVertBreak normalization by Release height:
-
-* Needs to be normalized because higher/lower arm slots affect your induced break number 
-* Isolation of InducedVertBreak regardless of the pitcher's arm slot
-* TODO: Switch Release Side for Vertical Zone location
+## Approach Angle normalizations:
 
 Model 1: Linear
 ```{r}
-# Using Residual Normalization
+# Using Residual Normalization, normalize vert approach Angle
 
 # Subset the data
-ivb_df <- main_swing %>%
+vaa_df <- main_swing %>%
   select(VertApprAngle, RelHeight, PlateLocHeight, is_whiff) %>%
   mutate(is_whiff = as.factor(is_whiff))
 
 # Scale the vars
-rec <- recipe(VertApprAngle ~ ., data = ivb_df) %>%
+rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
-ivb_df_std <- bake(rec_prepped, new_data = NULL)
+vaa_df_std <- bake(rec_prepped, new_data = NULL)
 
 # Plot pairs
-ggp <- ggpairs(ivb_df_std,
+ggp <- ggpairs(vaa_df_std,
         cols = 1:3,
         aes(color = as.factor(is_whiff),
         alpha = 0.5),
         progress = F)
-
-# Fit the model
-ivb_df_model <- ivb_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
-ivb_m <- lm(VertApprAngle ~ ., data = ivb_df_model)
-summary(ivb_m)
-
-summary(ivb_df_std)
-
 print(ggp)
 ```
 
+```{r}
+# Fit the model
+vaa_df_m1_vars <- vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
+vaa_m1 <- lm(VertApprAngle ~ ., data = vaa_df_m1_vars)
+summary(vaa_m1)
+
+vaa_df_m2_vars <- vaa_df_std %>% select(VertApprAngle, PlateLocHeight)
+vaa_m2 <- lm(VertApprAngle ~ ., data = vaa_df_m2_vars)
+summary(vaa_m2)
+```
+
+
 Model 2: GAM(Generalized Additive Model)
 ```{r}
-ivb_gam <- gam(InducedVertBreak ~ RelHeight + s(RelSide), data = ivb_df_model)
+vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + s(PlateLocHeight), data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
 
-summary(ivb_gam)
-plot(ivb_gam, pages = 1)
+summary(vaa_gam)
+plot(vaa_gam, pages = 1)
 
-ivb_normalized <- ivb_gam$residuals
-
-main_swing$InducedVertBreak_n <- ivb_gam$residuals
-
-ggplot(data = main_swing, aes(x=InducedVertBreak_n)) +
-  geom_density(fill="#69b3a2", color="#e9ecef", alpha=0.8) +
-  ggtitle("Normalized Induced Vert Break") +
-  theme_ipsum()
+# ivb_normalized <- ivb_gam$residuals
+# 
+# main_swing$InducedVertBreak_n <- ivb_gam$residuals
+# 
+# ggplot(data = main_swing, aes(x=InducedVertBreak_n)) +
+#   geom_density(fill="#69b3a2", color="#e9ecef", alpha=0.8) +
+#   ggtitle("Normalized Induced Vert Break") +
+#   theme_ipsum()
 ```
 
 Model 3: XGBoost
 ```{r}
-X <- as.matrix(ivb_df_model %>% select(RelHeight, RelSide))
-y <- as.numeric(ivb_df_model$InducedVertBreak)
-
-# train_control <- trainControl(
-#   method = "cv",          # Cross-validation
-#   number = 5,             # 5-fold cross-validation
-#   search = "grid",        # Use grid search
-#   verboseIter = TRUE      # Print progress during training
-# )
+# X <- as.matrix(ivb_df_model %>% select(RelHeight, RelSide))
+# y <- as.numeric(ivb_df_model$InducedVertBreak)
 # 
-# tune_grid <- expand.grid(
-#   nrounds = c(50, 100, 150),         # Number of boosting rounds
-#   max_depth = c(3, 6, 9),            # Maximum depth of trees
-#   eta = c(0.01, 0.1, 0.3),           # Learning rate
-#   gamma = c(0, 1, 5),                # Minimum loss reduction
-#   colsample_bytree = c(0.5, 0.7, 1), # Fraction of features for each tree
-#   min_child_weight = c(1, 3, 5),     # Minimum sum of instance weight
-#   subsample = c(0.6, 0.8, 1)         # Fraction of samples used for training
-# )
+# # train_control <- trainControl(
+# #   method = "cv",          # Cross-validation
+# #   number = 5,             # 5-fold cross-validation
+# #   search = "grid",        # Use grid search
+# #   verboseIter = TRUE      # Print progress during training
+# # )
+# # 
+# # tune_grid <- expand.grid(
+# #   nrounds = c(50, 100, 150),         # Number of boosting rounds
+# #   max_depth = c(3, 6, 9),            # Maximum depth of trees
+# #   eta = c(0.01, 0.1, 0.3),           # Learning rate
+# #   gamma = c(0, 1, 5),                # Minimum loss reduction
+# #   colsample_bytree = c(0.5, 0.7, 1), # Fraction of features for each tree
+# #   min_child_weight = c(1, 3, 5),     # Minimum sum of instance weight
+# #   subsample = c(0.6, 0.8, 1)         # Fraction of samples used for training
+# # )
+# # 
+# # model <- train(
+# #   x = X,                       # Feature matrix
+# #   y = y,                       # Target vector
+# #   method = "xgbTree",                # XGBoost tree model
+# #   trControl = train_control,         # Cross-validation settings
+# #   tuneGrid = tune_grid,              # Parameter grid
+# #   metric = "RMSE"                    # Metric to optimize (you can change to "Rsquared" for R²)
+# # )
 # 
-# model <- train(
-#   x = X,                       # Feature matrix
-#   y = y,                       # Target vector
-#   method = "xgbTree",                # XGBoost tree model
-#   trControl = train_control,         # Cross-validation settings
-#   tuneGrid = tune_grid,              # Parameter grid
-#   metric = "RMSE"                    # Metric to optimize (you can change to "Rsquared" for R²)
-# )
-
-#print(model)
-               
-
-ivb_xgb <- xgboost(data = X, label = y, nrounds = 100)
-preds <- predict(ivb_xgb, newdata = X)
-postResample(preds, y)
+# #print(model)
+#                
+# 
+# ivb_xgb <- xgboost(data = X, label = y, nrounds = 100)
+# preds <- predict(ivb_xgb, newdata = X)
+# postResample(preds, y)
 ```
 
 
-HorzBreak normalization
-by Release side; needs to be normalized because arm slot 
+## Horz Approach Angle normalization
 
-Spin rate normalization  
-by relspeed
+Standardize the rel-side for righties and lefties
+```{r}
+main_swing <- main_swing %>% 
+  mutate(RelSide = abs(RelSide))
 
-Vert/Horz Approach angle normalization by rel height, zone location
+summary(main_swing$RelSide)
+```
 
-Vert/Horz release angle normalization  
+Plot pairs
+```{r}
+# Using Residual Normalization, normalize horizontal approach Angle
+
+# Subset the data
+haa_df <- main_swing %>%
+  select(HorzApprAngle, RelSide, PlateLocSide, is_whiff) %>%
+  mutate(is_whiff = as.factor(is_whiff))
+
+#Scale the vars
+rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+haa_df_std <- bake(rec_prepped, new_data = NULL)
+
+# Plot pairs
+ggp <- ggpairs(haa_df_std,
+        cols = 1:3,
+        aes(color = as.factor(is_whiff),
+        alpha = 0.5),
+        progress = F)
+print(ggp)
+```
+
+Linear
+```{r}
+# Fit the model
+haa_df_m1_vars <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
+haa_m1 <- lm(HorzApprAngle ~ ., data = haa_df_m1_vars)
+summary(haa_m1)
+
+haa_df_m2_vars <- haa_df_std %>% select(HorzApprAngle, PlateLocSide)
+haa_m2 <- lm(HorzApprAngle ~ ., data = haa_df_m2_vars)
+summary(haa_m2)
+
+```
+
+GAM
+```{r}
+haa_gam <- gam(HorzApprAngle ~ s(RelSide) + s(PlateLocSide), data = haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide))
+
+summary(haa_gam)
+plot(haa_gam, pages = 1)
+```
+
+LightGBM
+```{r}
+df <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
+
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE
+)
+
+tune_grid <- expand.grid(
+  nrounds = c(100, 300),
+  max_depth = c(6, 3),
+  eta = c(0.1, 0.05),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = c(1, 5),
+  subsample = 0.8
+)
+
+xgb_model <- train(
+  HorzApprAngle ~ .,            
+  data = df,
+  method = "xgbTree",           # caret's XGBoost wrapper
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  metric = "RMSE"               # or MAE
+)
+
+print(xgb_model)
+plot(xgb_model)
+```
+
+```{r}
+print(xgb_model)
+```
+
+
 
 Subset the Dataset:
 ```{r}
