@@ -259,41 +259,34 @@ plot(vaa_gam, pages = 1)
 
 Model 3: XGBoost
 ```{r}
-# X <- as.matrix(ivb_df_model %>% select(RelHeight, RelSide))
-# y <- as.numeric(ivb_df_model$InducedVertBreak)
-# 
-# # train_control <- trainControl(
-# #   method = "cv",          # Cross-validation
-# #   number = 5,             # 5-fold cross-validation
-# #   search = "grid",        # Use grid search
-# #   verboseIter = TRUE      # Print progress during training
-# # )
-# # 
-# # tune_grid <- expand.grid(
-# #   nrounds = c(50, 100, 150),         # Number of boosting rounds
-# #   max_depth = c(3, 6, 9),            # Maximum depth of trees
-# #   eta = c(0.01, 0.1, 0.3),           # Learning rate
-# #   gamma = c(0, 1, 5),                # Minimum loss reduction
-# #   colsample_bytree = c(0.5, 0.7, 1), # Fraction of features for each tree
-# #   min_child_weight = c(1, 3, 5),     # Minimum sum of instance weight
-# #   subsample = c(0.6, 0.8, 1)         # Fraction of samples used for training
-# # )
-# # 
-# # model <- train(
-# #   x = X,                       # Feature matrix
-# #   y = y,                       # Target vector
-# #   method = "xgbTree",                # XGBoost tree model
-# #   trControl = train_control,         # Cross-validation settings
-# #   tuneGrid = tune_grid,              # Parameter grid
-# #   metric = "RMSE"                    # Metric to optimize (you can change to "Rsquared" for R²)
-# # )
-# 
-# #print(model)
-#                
-# 
-# ivb_xgb <- xgboost(data = X, label = y, nrounds = 100)
-# preds <- predict(ivb_xgb, newdata = X)
-# postResample(preds, y)
+df <- vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
+
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE
+)
+
+tune_grid <- expand.grid(
+  nrounds = c(100),
+  max_depth = c(3),
+  eta = c(0.05),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = c(5),
+  subsample = 0.8
+)
+
+xgb_model <- train(
+  VertApprAngle ~ .,            
+  data = df,
+  method = "xgbTree",           # caret's XGBoost wrapper
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  metric = "RMSE"               # or MAE
+)
+
+print(xgb_model)
 ```
 
 
@@ -346,7 +339,7 @@ summary(haa_m2)
 
 GAM
 ```{r}
-haa_gam <- gam(HorzApprAngle ~ s(RelSide) + s(PlateLocSide), data = haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide))
+haa_gam <- gam(HorzApprAngle ~ s(RelSide) + PlateLocSide, data = haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide))
 
 summary(haa_gam)
 plot(haa_gam, pages = 1)
@@ -354,35 +347,35 @@ plot(haa_gam, pages = 1)
 
 LightGBM
 ```{r}
-df <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
-
-train_control <- trainControl(
-  method = "cv",
-  number = 10,
-  verboseIter = TRUE
-)
-
-tune_grid <- expand.grid(
-  nrounds = c(100, 300),
-  max_depth = c(6, 3),
-  eta = c(0.1, 0.05),
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = c(1, 5),
-  subsample = 0.8
-)
-
-xgb_model <- train(
-  HorzApprAngle ~ .,            
-  data = df,
-  method = "xgbTree",           # caret's XGBoost wrapper
-  trControl = train_control,
-  tuneGrid = tune_grid,
-  metric = "RMSE"               # or MAE
-)
-
-print(xgb_model)
-plot(xgb_model)
+# df <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
+# 
+# train_control <- trainControl(
+#   method = "cv",
+#   number = 10,
+#   verboseIter = TRUE
+# )
+# 
+# tune_grid <- expand.grid(
+#   nrounds = c(100, 300),
+#   max_depth = c(6, 3),
+#   eta = c(0.1, 0.05),
+#   gamma = 0,
+#   colsample_bytree = 1,
+#   min_child_weight = c(1, 5),
+#   subsample = 0.8
+# )
+# 
+# xgb_model <- train(
+#   HorzApprAngle ~ .,            
+#   data = df,
+#   method = "xgbTree",           # caret's XGBoost wrapper
+#   trControl = train_control,
+#   tuneGrid = tune_grid,
+#   metric = "RMSE"               # or MAE
+# )
+# 
+# print(xgb_model)
+# plot(xgb_model)
 ```
 
 ```{r}
