@@ -68,10 +68,13 @@ Drop NA's for the variables we will use
 filtered_vars <- c(
   "Pitcher",
   "PitcherId",
+  "PitcherThrows",
   "TaggedPitchType",
   "RelSpeed",           # Speed at release
   "ZoneSpeed",          # Speed at the plate
   "EffectiveVelo",      # Perceived pitch speed
+  "ZoneTime",           # Time to reach plate
+  "SpeedDrop",          # Velo loss from release to plate
   "VertBreak",          # Full vertical break
   "InducedVertBreak",   # Break excluding gravity
   "HorzBreak",          # Horizontal movement
@@ -84,15 +87,19 @@ filtered_vars <- c(
   "HorzApprAngle",      # Horizontal approach angle
   "VertRelAngle",       # Vertical release angle
   "HorzRelAngle",       # Horizontal release angle
-  "Tilt",               # Spin tilt
   "PlateLocHeight",     # Raw vertical location
   "PlateLocSide",       # Raw horizontal location
-  "ZoneTime",           # Time to reach plate
-  "SpeedDrop",          # Velo loss from release to plate
-  "Balls",
-  "Strikes",
-  "Outs",
-  "BatterSide"
+  "Balls",              # Balls
+  "Strikes",            # Strikes
+  "Outs",               # Outs
+  "Batter",
+  "BatterTeam",
+  "BatterSide",         # Bats L/R
+  "PAofInning",         # Plate Appearance of Inning
+  "PitchofPA",          # Pitch of Plate Appearance
+  "PitchReleaseConfidence", # Trackman tracking confidence level
+  "PitchLocationConfidence", # Trackman tracking confidence level
+  "PitchMovementConfidence" # Trackman tracking confidence level
 )
 
 main %>%
@@ -229,14 +236,14 @@ print(ggp)
 ```
 
 ```{r}
-# Fit the model
-vaa_df_m1_vars <- vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
-vaa_m1 <- lm(VertApprAngle ~ ., data = vaa_df_m1_vars)
-summary(vaa_m1)
-
-vaa_df_m2_vars <- vaa_df_std %>% select(VertApprAngle, PlateLocHeight)
-vaa_m2 <- lm(VertApprAngle ~ ., data = vaa_df_m2_vars)
-summary(vaa_m2)
+# # Fit the model
+# vaa_df_m1_vars <- vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
+# vaa_m1 <- lm(VertApprAngle ~ ., data = vaa_df_m1_vars)
+# summary(vaa_m1)
+# 
+# vaa_df_m2_vars <- vaa_df_std %>% select(VertApprAngle, PlateLocHeight)
+# vaa_m2 <- lm(VertApprAngle ~ ., data = vaa_df_m2_vars)
+# summary(vaa_m2)
 ```
 
 
@@ -259,34 +266,34 @@ plot(vaa_gam, pages = 1)
 
 Model 3: XGBoost
 ```{r}
-df <- vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
-
-train_control <- trainControl(
-  method = "cv",
-  number = 10,
-  verboseIter = TRUE
-)
-
-tune_grid <- expand.grid(
-  nrounds = c(100),
-  max_depth = c(3),
-  eta = c(0.05),
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = c(5),
-  subsample = 0.8
-)
-
-xgb_model <- train(
-  VertApprAngle ~ .,            
-  data = df,
-  method = "xgbTree",           # caret's XGBoost wrapper
-  trControl = train_control,
-  tuneGrid = tune_grid,
-  metric = "RMSE"               # or MAE
-)
-
-print(xgb_model)
+# df <- vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight)
+# 
+# train_control <- trainControl(
+#   method = "cv",
+#   number = 10,
+#   verboseIter = TRUE
+# )
+# 
+# tune_grid <- expand.grid(
+#   nrounds = c(100),
+#   max_depth = c(3),
+#   eta = c(0.05),
+#   gamma = 0,
+#   colsample_bytree = 1,
+#   min_child_weight = c(5),
+#   subsample = 0.8
+# )
+# 
+# xgb_model <- train(
+#   VertApprAngle ~ .,            
+#   data = df,
+#   method = "xgbTree",           # caret's XGBoost wrapper
+#   trControl = train_control,
+#   #tuneGrid = tune_grid,
+#   metric = "RMSE"               # or MAE
+# )
+# 
+# print(xgb_model)
 ```
 
 
@@ -326,55 +333,53 @@ print(ggp)
 
 Linear
 ```{r}
-# Fit the model
-haa_df_m1_vars <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
-haa_m1 <- lm(HorzApprAngle ~ ., data = haa_df_m1_vars)
-summary(haa_m1)
-
-haa_df_m2_vars <- haa_df_std %>% select(HorzApprAngle, PlateLocSide)
-haa_m2 <- lm(HorzApprAngle ~ ., data = haa_df_m2_vars)
-summary(haa_m2)
+# # Fit the model
+# haa_df_m1_vars <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
+# haa_m1 <- lm(HorzApprAngle ~ ., data = haa_df_m1_vars)
+# summary(haa_m1)
+# 
+# haa_df_m2_vars <- haa_df_std %>% select(HorzApprAngle, PlateLocSide)
+# haa_m2 <- lm(HorzApprAngle ~ ., data = haa_df_m2_vars)
+# summary(haa_m2)
 
 ```
 
 GAM
 ```{r}
-haa_gam <- gam(HorzApprAngle ~ s(RelSide) + PlateLocSide, data = haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide))
-
-summary(haa_gam)
-plot(haa_gam, pages = 1)
+# haa_gam <- gam(HorzApprAngle ~ s(RelSide) + PlateLocSide, data = haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide))
+# 
+# summary(haa_gam)
+# plot(haa_gam, pages = 1)
 ```
 
-LightGBM
+XGBoost
 ```{r}
-# df <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
-# 
-# train_control <- trainControl(
-#   method = "cv",
-#   number = 10,
-#   verboseIter = TRUE
-# )
-# 
-# tune_grid <- expand.grid(
-#   nrounds = c(100, 300),
-#   max_depth = c(6, 3),
-#   eta = c(0.1, 0.05),
-#   gamma = 0,
-#   colsample_bytree = 1,
-#   min_child_weight = c(1, 5),
-#   subsample = 0.8
-# )
-# 
-# xgb_model <- train(
-#   HorzApprAngle ~ .,            
-#   data = df,
-#   method = "xgbTree",           # caret's XGBoost wrapper
-#   trControl = train_control,
-#   tuneGrid = tune_grid,
-#   metric = "RMSE"               # or MAE
-# )
-# 
-# print(xgb_model)
+df <- haa_df_std %>% select(HorzApprAngle, RelSide, PlateLocSide)
+
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE
+)
+
+tune_grid <- expand.grid(
+  nrounds = c(100),
+  max_depth = c(3),
+  eta = c(0.1),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = c(5),
+  subsample = 0.8
+)
+
+xgb_model <- train(
+  HorzApprAngle ~ .,
+  data = df,
+  method = "xgbTree",           # caret's XGBoost wrapper
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  metric = "RMSE"               # or MAE
+)
 # plot(xgb_model)
 ```
 
@@ -386,44 +391,44 @@ print(xgb_model)
 
 Subset the Dataset:
 ```{r}
-useful_vars <- c(
-  "is_whiff",
-  "Pitcher",
-  "PitcherId",
-  "TaggedPitchType",
-  "Count",
-  "Outs",
-  "BatterSide",
-  "RelSpeed",           # Speed at release
-  "ZoneSpeed",          # Speed at the plate
-  "EffectiveVelo",      # Perceived pitch speed
-  "VertBreak",          # Full vertical break
-  "InducedVertBreak",   # Break excluding gravity
-  "InducedVertBreak_n",   # Break excluding gravity, normalized to RelHeight and RelSide
-  "HorzBreak",          # Horizontal movement
-  "SpinRate",           # Raw spin
-  "SpinAxis",           # 0–360 spin axis
-  "SpinAxis_sin",
-  "SpinAxis_cos",
-  "RelHeight",          # Release height
-  "RelSide",            # Horizontal release side
-  "Extension",          # Distance toward plate
-  "VertApprAngle",      # Vertical approach angle
-  "HorzApprAngle",      # Horizontal approach angle
-  "VertRelAngle",       # Vertical release angle
-  "HorzRelAngle",       # Horizontal release angle
-  "PlateLocHeight",     # Raw vertical location
-  "PlateLocSide",       # Raw horizontal location
-  "ZoneTime",           # Time to reach plate
-  "SpeedDrop"           # Velo loss from release to plate
-)
+# useful_vars <- c(
+#   "is_whiff",
+#   "Pitcher",
+#   "PitcherId",
+#   "TaggedPitchType",
+#   "Count",
+#   "Outs",
+#   "BatterSide",
+#   "RelSpeed",           # Speed at release
+#   "ZoneSpeed",          # Speed at the plate
+#   "EffectiveVelo",      # Perceived pitch speed
+#   "VertBreak",          # Full vertical break
+#   "InducedVertBreak",   # Break excluding gravity
+#   "InducedVertBreak_n",   # Break excluding gravity, normalized to RelHeight and RelSide
+#   "HorzBreak",          # Horizontal movement
+#   "SpinRate",           # Raw spin
+#   "SpinAxis",           # 0–360 spin axis
+#   "SpinAxis_sin",
+#   "SpinAxis_cos",
+#   "RelHeight",          # Release height
+#   "RelSide",            # Horizontal release side
+#   "Extension",          # Distance toward plate
+#   "VertApprAngle",      # Vertical approach angle
+#   "HorzApprAngle",      # Horizontal approach angle
+#   "VertRelAngle",       # Vertical release angle
+#   "HorzRelAngle",       # Horizontal release angle
+#   "PlateLocHeight",     # Raw vertical location
+#   "PlateLocSide",       # Raw horizontal location
+#   "ZoneTime",           # Time to reach plate
+#   "SpeedDrop"           # Velo loss from release to plate
+# )
 
-main_sw_filter <- main_swing %>%
-  select(any_of(useful_vars))
+# main_sw_filter <- main_swing %>%
+#   select(any_of(useful_vars))
 ```
 
 ```{r}
-head(main_sw_filter)
+head(main_swing)
 ```
 
 
