@@ -3,3 +3,319 @@ title: "stuff_pipeline"
 format: pdf
 ---
 
+Stuff pipeline: Reads in the csv, outputs a cleaned dataset 
+
+Combining the Datasets
+```{r}
+set.seed(777)
+library(tidyverse)
+library(xgboost)
+library(caret)
+library(recipes)
+library(mgcv)
+library(ggplot2)
+library(GGally)
+
+# Path-to-data, /data/datasets.csv
+ucla <- read_csv("./data/UCLA2023-2024.csv")
+penn <- read_csv("./data/PennState2024.csv")
+purdue <- read_csv("./data/Purdue2024.csv")
+michigan <- read_csv("./data/Michigan2024.csv")
+
+# Need to convert from character to date object
+ucla <- ucla %>%
+  mutate(Date = as.Date(Date)) %>%
+  mutate(UTCDate = as.Date(UTCDate)) %>%
+  mutate(AwayTeamForeignID = as.character(AwayTeamForeignID))
+
+# The data set that we will be mutating
+main <- bind_rows(ucla, penn, michigan, purdue)
+```
+
+Cleaning:
+```{r}
+filtered_vars <- c(
+  "Pitcher",
+  "PitcherId",
+  "PitcherThrows",
+  "TaggedPitchType",
+  "RelSpeed",           # Speed at release
+  "ZoneSpeed",          # Speed at the plate
+  "EffectiveVelo",      # Perceived pitch speed
+  "ZoneTime",           # Time to reach plate
+  "SpeedDrop",          # Velo loss from release to plate
+  "VertBreak",          # Full vertical break
+  "InducedVertBreak",   # Break excluding gravity
+  "HorzBreak",          # Horizontal movement
+  "SpinRate",           # Raw spin
+  "SpinAxis",           # 0–360 spin axis
+  "RelHeight",          # Release height
+  "RelSide",            # Horizontal release side
+  "Extension",          # Distance toward plate
+  "VertApprAngle",      # Vertical approach angle
+  "HorzApprAngle",      # Horizontal approach angle
+  "VertRelAngle",       # Vertical release angle
+  "HorzRelAngle",       # Horizontal release angle
+  "PlateLocHeight",     # Raw vertical location
+  "PlateLocSide",       # Raw horizontal location
+  "Balls",              # Balls
+  "Strikes",            # Strikes
+  "Outs",               # Outs
+  "Batter",
+  "BatterTeam",
+  "BatterSide",         # Bats L/R
+  "PAofInning",         # Plate Appearance of Inning
+  "PitchofPA",          # Pitch of Plate Appearance
+  "PitchReleaseConfidence", # Trackman tracking confidence level
+  "PitchLocationConfidence", # Trackman tracking confidence level
+  "PitchMovementConfidence" # Trackman tracking confidence level
+)
+
+main %>%
+  select(all_of(filtered_vars)) %>%
+  summarise(across(everything(), ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
+  arrange(desc(na_count))
+
+main <- main %>%
+  drop_na(all_of(filtered_vars)) %>%
+  arrange(UTCDateTime, PitchNo)
+```
+
+
+Variable Transformations:
+```{r}
+# Creating an ID
+main <- main %>%
+  mutate(DatasetID = 1:n()) %>%
+  relocate(DatasetID, .before=PitchNo) %>%
+  mutate(
+    SpinAxis_rad = SpinAxis * pi / 180,
+    SpinAxis_sin = sin(SpinAxis_rad),
+    SpinAxis_cos = cos(SpinAxis_rad),
+  ) %>%
+  relocate(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos, .after=SpinAxis) %>% # Spin Axis to sin/cos component %>% 
+  mutate(
+    BatterSide = ifelse(BatterSide == "Right", 1, 0),
+    PitcherThrows = ifelse(PitcherThrows == "Right", 1, 0)
+  ) %>%
+  mutate(BatterSide = factor(BatterSide)) %>% # Batterside and PitcherThrows to binary: 1 - right 0 - left
+  mutate(Count = factor(paste0(Balls, "-", Strikes))) %>%
+  relocate(Count, .after=Strikes) %>% # Creating a factor of counts
+  mutate(Outs = factor(Outs), Inning = factor(Inning)) %>% # Creating a factor for outs and innings
+  mutate(RelSide = abs(RelSide)) # Standardize the rel-side for righties and lefties
+```
+
+
+```{r}
+head(main)
+write_csv(main, "stuff_data_full_raw.csv")
+```
+
+Per Pitch Transformations
+
+Fastball
+```{r}
+main %>% 
+  group_by(TaggedPitchType) %>%
+  summarise(Count = n()) %>%
+  arrange(desc(Count))
+```
+
+```{r}
+main_fb <- main %>% 
+  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall")
+
+# Training the models for residual normalization
+# Vertical Approach Angle
+vaa_df <- main_fb %>%
+  select(VertApprAngle, RelHeight, PlateLocHeight)
+rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+vaa_df_std <- bake(rec_prepped, new_data = NULL)
+vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
+summary(vaa_gam)
+plot(vaa_gam, pages = 1)
+
+# Subset the data
+haa_df <- main_fb %>%
+  select(HorzApprAngle, RelSide, PlateLocSide)
+rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+haa_df_std <- bake(rec_prepped, new_data = NULL)
+
+
+train_control <- trainControl(
+  method = "cv",
+  number = 10,
+  verboseIter = TRUE
+)
+
+tune_grid <- expand.grid(
+  nrounds = 100,
+  max_depth = 3,
+  eta = 0.1,
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 5,
+  subsample = 0.8
+)
+
+xgb_model <- train(
+  HorzApprAngle ~ .,
+  data = haa_df,
+  method = "xgbTree",           # caret's XGBoost wrapper
+  trControl = train_control,
+  tuneGrid = tune_grid,
+  metric = "RMSE"               # or MAE
+)
+print(xgb_model)
+```
+
+```{r}
+cat("Vertical Approach Angle: \n")
+vert_hat <- predict(vaa_gam, newdata = vaa_df %>% select(RelHeight, PlateLocHeight))
+summary(vert_hat)
+summary(main_fb$VertApprAngle)
+
+cat("Horizontal Approach Angle: \n")
+horz_hat <- predict(xgb_model, newdata = haa_df %>% select(RelSide, PlateLocSide))
+summary(y_hat)
+summary(main_fb$HorzApprAngle)
+
+main_fb <- main_fb %>%
+  mutate(HorzApprAngle_n = as.numeric(HorzApprAngle - horz_hat),
+         VertApprAngle_n = as.numeric(VertApprAngle - vert_hat)) %>%
+  relocate(HorzApprAngle_n, VertApprAngle_n, .before=VertApprAngle)
+
+cat("Normalized Value Summary: \n")
+cat("Horz: \n")
+summary(main_fb$HorzApprAngle_n)
+cat("Vert: \n")
+summary(main_fb$VertApprAngle_n)
+```
+
+```{r}
+ggp <- ggpairs(vaa_df_std,
+        progress = F)
+print(ggp)
+ggp <- ggpairs(haa_df_std,
+        progress = F)
+print(ggp)
+```
+
+```{r}
+write_csv(main_fb, "stuff_data_fastball_transformed.csv")
+```
+
+
+Slider
+
+```{r}
+main_sl <- main %>% 
+  filter(TaggedPitchType == "Slider")
+
+# Training the models for residual normalization
+# Vertical Approach Angle
+vaa_df <- main_sl %>%
+  select(VertApprAngle, RelHeight, PlateLocHeight)
+rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+vaa_df_std <- bake(rec_prepped, new_data = NULL)
+# vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
+# summary(vaa_gam)
+# plot(vaa_gam, pages = 1)
+
+# Subset the data
+# Horz Appr Angle
+haa_df <- main_sl %>%
+  select(HorzApprAngle, RelSide, PlateLocSide)
+rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+haa_df_std <- bake(rec_prepped, new_data = NULL)
+
+ggp <- ggpairs(vaa_df_std,
+        progress = F)
+print(ggp)
+ggp <- ggpairs(haa_df_std,
+        progress = F)
+print(ggp)
+
+```
+
+
+Curveball
+
+```{r}
+main_cv <- main %>% 
+  filter(TaggedPitchType == "Curveball")
+
+# Training the models for residual normalization
+# Vertical Approach Angle
+vaa_df <- main_cv %>%
+  select(VertApprAngle, RelHeight, PlateLocHeight)
+rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+vaa_df_std <- bake(rec_prepped, new_data = NULL)
+# vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
+# summary(vaa_gam)
+# plot(vaa_gam, pages = 1)
+
+# Subset the data
+# Horz Appr Angle
+haa_df <- main_cv %>%
+  select(HorzApprAngle, RelSide, PlateLocSide)
+rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+haa_df_std <- bake(rec_prepped, new_data = NULL)
+
+ggp <- ggpairs(vaa_df_std,
+        progress = F)
+print(ggp)
+ggp <- ggpairs(haa_df_std,
+        progress = F)
+print(ggp)
+```
+
+
+Changeup
+
+```{r}
+main_chg <- main %>% 
+  filter(TaggedPitchType == "ChangeUp")
+
+# Training the models for residual normalization
+# Vertical Approach Angle
+vaa_df <- main_chg %>%
+  select(VertApprAngle, RelHeight, PlateLocHeight)
+rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+vaa_df_std <- bake(rec_prepped, new_data = NULL)
+# vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
+# summary(vaa_gam)
+# plot(vaa_gam, pages = 1)
+
+# Subset the data
+# Horz Appr Angle
+haa_df <- main_chg %>%
+  select(HorzApprAngle, RelSide, PlateLocSide)
+rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
+  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
+rec_prepped <- prep(rec)
+haa_df_std <- bake(rec_prepped, new_data = NULL)
+
+ggp <- ggpairs(vaa_df_std,
+        progress = F)
+print(ggp)
+ggp <- ggpairs(haa_df_std,
+        progress = F)
+print(ggp)
+```
+

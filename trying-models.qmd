@@ -1,0 +1,171 @@
+---
+title: "trying-models"
+format: html
+---
+
+```{r}
+library(tidyverse)
+library(xgboost)
+library(caret)
+
+library(lubridate)
+library(ggplot2)
+library(ggcorrplot)
+library(GGally)
+library(pROC)
+library(caret)
+library(ROCR)
+library(viridis)
+library(glmnet)
+library(recipes)
+library(yardstick)
+library(Matrix)
+library(mgcv)
+library(hrbrthemes)
+```
+
+
+```{r}
+data <- read_csv("./stuff_data_fastball_transformed.csv")
+```
+
+```{r}
+model_vars <- c(
+  "is_whiff",           # response var
+  "RelSpeed",           # Speed at release
+  "ZoneSpeed",          # Speed at the plate
+  "EffectiveVelo",      # Perceived pitch speed
+  "ZoneTime",           # Time to reach plate
+  "SpeedDrop",          # Velo loss from release to plate
+  "VertBreak",          # Full vertical break
+  "InducedVertBreak",   # Break excluding gravity
+  "HorzBreak",          # Horizontal movement
+  "SpinRate",           # Raw spin
+  "SpinAxis",           # 0–360 spin axis
+  "SpinAxis_sin",
+  "SpinAxis_cos",
+  "RelHeight",          # Release height
+  "RelSide",            # Horizontal release side
+  "Extension",          # Distance toward plate
+  "VertApprAngle_n",    # Vertical approach angle, normalized
+  "HorzApprAngle_n",    # Horizontal approach angle, normalized
+  "VertApprAngle",      # Vertical approach angle
+  "HorzApprAngle",      # Horizontal approach angle
+  "VertRelAngle",       # Vertical release angle
+  "HorzRelAngle",       # Horizontal release angle
+  "PlateLocHeight",     # Raw vertical location
+  "PlateLocSide",       # Raw horizontal location
+  "Balls",              # Balls
+  "Strikes",            # Strikes
+  "Count",
+  "Outs",               # Outs
+  "BatterSide",         # Bats L/R
+  "PitcherThrows",      # Throws L/R
+  "PAofInning",         # Plate Appearance of Inning
+  "PitchofPA",          # Pitch of Plate Appearance
+  #"PitchReleaseConfidence", # Trackman tracking confidence level
+  "PitchLocationConfidence", # Trackman tracking confidence level
+  "PitchMovementConfidence" # Trackman tracking confidence level
+)
+
+df_filtered <- data %>%
+  filter(PitchCall %in% c("StrikeCalled", "StrikeSwinging", "InPlay", "FoulBall", "FoulBallFieldable", "FoulBallNotFieldable")) %>%
+  mutate(is_whiff = ifelse(PitchCall=="StrikeSwinging", "yes", "no")) %>%
+  select(all_of(model_vars)) %>%
+  mutate(#PitchReleaseConfidence = (factor(PitchReleaseConfidence)),
+         PitchLocationConfidence = (factor(PitchLocationConfidence)),
+         PitchMovementConfidence = (factor(PitchMovementConfidence)),
+         Count = factor(Count),
+         is_whiff = factor(is_whiff))
+```
+
+```{r}
+split_index <- sample(seq_len(nrow(df_filtered)), size = 0.8 * nrow(df_filtered))
+
+# Create training and testing datasets
+train_data <- df_filtered[split_index, ]
+test_data <- df_filtered[-split_index, ]
+
+dim(train_data)
+dim(test_data)
+```
+
+```{r}
+# Set up training
+train_control <- trainControl(
+  method = "cv",
+  number = 5,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+
+# Train XGBoost model
+xgb_model <- train(
+  is_whiff ~ .,
+  data = train_data,
+  method = "xgbTree",
+  trControl = train_control,
+  metric = "ROC"
+)
+print(xgb_model)
+```
+
+```{r}
+print(xgb)
+```
+
+```{r}
+plot(xgb_model)
+```
+
+```{r}
+# Predict class probabilities
+pred_probs <- predict(xgb_model, newdata = test_data, type = "prob")
+
+# Extract the probabilities for the "positive" class — e.g., "1" or "Yes"
+prob_positive <- pred_probs[, "yes"]
+
+library(pROC)
+
+# Generate ROC object
+roc_obj <- roc(response = test_data$is_whiff, predictor = prob_positive)
+
+# Plot ROC curve in color
+plot(roc_obj, col = "#2c7bb6", lwd = 3, main = "ROC Curve for XGBoost Model")
+
+# Optionally add AUC to the plot
+auc_val <- auc(roc_obj)
+legend("bottomright", legend = paste("AUC =", round(auc_val, 3)), col = "#2c7bb6", lwd = 3)
+
+# Print AUC in console
+cat("AUC:", round(auc_val, 3), "\n")
+
+plot.roc(roc_obj, print.auc = TRUE, col = rainbow(10), legacy.axes = TRUE)
+
+library(ROCR)
+
+pred_obj <- prediction(prob_positive, test_data$is_whiff)
+perf <- performance(pred_obj, "tpr", "fpr")
+
+# Plot colored ROC curve
+plot(perf, colorize = TRUE, main = "ROCR - ROC Curve")
+
+# Calculate and print AUC
+auc_perf <- performance(pred_obj, "auc")
+auc_val <- auc_perf@y.values[[1]]
+cat("AUC:", round(auc_val, 3), "\n")
+
+```
+
+```{r}
+# Get variable importance
+importance <- varImp(xgb_model)
+
+# Print variable importance
+print(importance)
+
+# Plot the top variables
+plot(importance, top = 20)  # Top 20 variables by importance
+```
+
