@@ -3,3 +3,5 @@
 .RData
 .Ruserdata
 /data/*
+/stuff_pipeline_cache/*
+/stuff_pipeline_files/*

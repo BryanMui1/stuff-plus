@@ -1,6 +1,16 @@
 ---
 title: "stuff_pipeline"
-format: pdf
+execute:
+  cache: true
+format:
+  pdf:
+    geometry: left=0.3in, right=0.3in, top=0.3in, bottom=0.3in
+    keep-tex: true
+    include-in-header:
+       text: |
+         \usepackage{fvextra}
+         \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+         \DefineVerbatimEnvironment{OutputCode}{Verbatim}{breaklines,commandchars=\\\{\}}
 ---
 
 Stuff pipeline: Reads in the csv, outputs a cleaned dataset 
@@ -60,12 +70,14 @@ filtered_vars <- c(
   "PlateLocSide",       # Raw horizontal location
   "Balls",              # Balls
   "Strikes",            # Strikes
+  "Inning",
   "Outs",               # Outs
   "Batter",
   "BatterTeam",
   "BatterSide",         # Bats L/R
   "PAofInning",         # Plate Appearance of Inning
   "PitchofPA",          # Pitch of Plate Appearance
+  "PitchNo",            # Pitch number of the game
   "PitchReleaseConfidence", # Trackman tracking confidence level
   "PitchLocationConfidence", # Trackman tracking confidence level
   "PitchMovementConfidence" # Trackman tracking confidence level
@@ -87,7 +99,7 @@ Variable Transformations:
 ```{r}
 # Creating an ID
 main <- main %>%
-  mutate(DatasetID = 1:n()) %>%
+  mutate(DatasetID = 1:n()) %>% # making IDs
   relocate(DatasetID, .before=PitchNo) %>%
   mutate(
     SpinAxis_rad = SpinAxis * pi / 180,
@@ -95,14 +107,14 @@ main <- main %>%
     SpinAxis_cos = cos(SpinAxis_rad),
   ) %>%
   relocate(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos, .after=SpinAxis) %>% # Spin Axis to sin/cos component %>% 
-  mutate(
-    BatterSide = ifelse(BatterSide == "Right", 1, 0),
-    PitcherThrows = ifelse(PitcherThrows == "Right", 1, 0)
-  ) %>%
-  mutate(BatterSide = factor(BatterSide)) %>% # Batterside and PitcherThrows to binary: 1 - right 0 - left
+  # mutate(
+  #   BatterSide = ifelse(BatterSide == "Right", 1, 0),
+  #   PitcherThrows = ifelse(PitcherThrows == "Right", 1, 0)
+  # ) %>%
+  # mutate(BatterSide = factor(BatterSide)) %>% # Batterside and PitcherThrows to binary: 1 - right 0 - left
   mutate(Count = factor(paste0(Balls, "-", Strikes))) %>%
   relocate(Count, .after=Strikes) %>% # Creating a factor of counts
-  mutate(Outs = factor(Outs), Inning = factor(Inning)) %>% # Creating a factor for outs and innings
+  # mutate(Outs = factor(Outs), Inning = factor(Inning)) %>% # Creating a factor for outs and innings
   mutate(RelSide = abs(RelSide)) # Standardize the rel-side for righties and lefties
 ```
 
@@ -134,9 +146,6 @@ rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 vaa_df_std <- bake(rec_prepped, new_data = NULL)
-vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
-summary(vaa_gam)
-plot(vaa_gam, pages = 1)
 
 # Subset the data
 haa_df <- main_fb %>%
@@ -145,7 +154,12 @@ rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 haa_df_std <- bake(rec_prepped, new_data = NULL)
+```
 
+```{r}
+vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
+summary(vaa_gam)
+plot(vaa_gam, pages = 1)
 
 train_control <- trainControl(
   method = "cv",
@@ -172,9 +186,8 @@ xgb_model <- train(
   metric = "RMSE"               # or MAE
 )
 print(xgb_model)
-```
 
-```{r}
+
 cat("Vertical Approach Angle: \n")
 vert_hat <- predict(vaa_gam, newdata = vaa_df %>% select(RelHeight, PlateLocHeight))
 summary(vert_hat)
@@ -182,7 +195,7 @@ summary(main_fb$VertApprAngle)
 
 cat("Horizontal Approach Angle: \n")
 horz_hat <- predict(xgb_model, newdata = haa_df %>% select(RelSide, PlateLocSide))
-summary(y_hat)
+summary(horz_hat)
 summary(main_fb$HorzApprAngle)
 
 main_fb <- main_fb %>%
@@ -198,10 +211,14 @@ summary(main_fb$VertApprAngle_n)
 ```
 
 ```{r}
-ggp <- ggpairs(vaa_df_std,
+vaa_df_std$PitcherSide <- factor(main_fb$PitcherThrows)
+haa_df_std$PitcherSide <- factor(main_fb$PitcherThrows)
+ggp <- ggpairs(vaa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
-ggp <- ggpairs(haa_df_std,
+ggp <- ggpairs(haa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
 ```
@@ -213,7 +230,7 @@ write_csv(main_fb, "stuff_data_fastball_transformed.csv")
 
 Slider
 
-```{r}
+```{r prep-slider}
 main_sl <- main %>% 
   filter(TaggedPitchType == "Slider")
 
@@ -225,11 +242,7 @@ rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 vaa_df_std <- bake(rec_prepped, new_data = NULL)
-# vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
-# summary(vaa_gam)
-# plot(vaa_gam, pages = 1)
 
-# Subset the data
 # Horz Appr Angle
 haa_df <- main_sl %>%
   select(HorzApprAngle, RelSide, PlateLocSide)
@@ -237,20 +250,25 @@ rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 haa_df_std <- bake(rec_prepped, new_data = NULL)
+```
 
-ggp <- ggpairs(vaa_df_std,
+```{r}
+vaa_df_std$PitcherSide <- factor(main_sl$PitcherThrows)
+haa_df_std$PitcherSide <- factor(main_sl$PitcherThrows)
+ggp <- ggpairs(vaa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
-ggp <- ggpairs(haa_df_std,
+ggp <- ggpairs(haa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
-
 ```
 
 
 Curveball
 
-```{r}
+```{r prep-curveball}
 main_cv <- main %>% 
   filter(TaggedPitchType == "Curveball")
 
@@ -262,11 +280,7 @@ rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 vaa_df_std <- bake(rec_prepped, new_data = NULL)
-# vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
-# summary(vaa_gam)
-# plot(vaa_gam, pages = 1)
 
-# Subset the data
 # Horz Appr Angle
 haa_df <- main_cv %>%
   select(HorzApprAngle, RelSide, PlateLocSide)
@@ -274,11 +288,19 @@ rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 haa_df_std <- bake(rec_prepped, new_data = NULL)
+```
 
-ggp <- ggpairs(vaa_df_std,
+```{r}
+vaa_df_std$PitcherSide <- factor(main_cv$PitcherThrows)
+haa_df_std$PitcherSide <- factor(main_cv$PitcherThrows)
+summary(vaa_df_std)
+summary(haa_df_std)
+ggp <- ggpairs(vaa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
-ggp <- ggpairs(haa_df_std,
+ggp <- ggpairs(haa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
 ```
@@ -286,7 +308,7 @@ print(ggp)
 
 Changeup
 
-```{r}
+```{r rec-prep-change}
 main_chg <- main %>% 
   filter(TaggedPitchType == "ChangeUp")
 
@@ -298,11 +320,7 @@ rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 vaa_df_std <- bake(rec_prepped, new_data = NULL)
-# vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
-# summary(vaa_gam)
-# plot(vaa_gam, pages = 1)
 
-# Subset the data
 # Horz Appr Angle
 haa_df <- main_chg %>%
   select(HorzApprAngle, RelSide, PlateLocSide)
@@ -310,11 +328,19 @@ rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
   step_normalize(all_numeric_predictors())     # Normalize (center & scale)
 rec_prepped <- prep(rec)
 haa_df_std <- bake(rec_prepped, new_data = NULL)
+```
 
-ggp <- ggpairs(vaa_df_std,
+```{r}
+vaa_df_std$PitcherSide <- factor(main_chg$PitcherThrows)
+haa_df_std$PitcherSide <- factor(main_chg$PitcherThrows)
+summary(vaa_df_std)
+summary(haa_df_std)
+ggp <- ggpairs(vaa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
-ggp <- ggpairs(haa_df_std,
+ggp <- ggpairs(haa_df_std, 
+        aes(color = PitcherSide),
         progress = F)
 print(ggp)
 ```

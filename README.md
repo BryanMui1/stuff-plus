@@ -60,21 +60,24 @@ Go through and remove not in play/ground outs/fly outs
     
 To do: checklist
 
-- Keep Vertical, HorzBreak, SpinRate, RelHeight unmodified
-- Normalize ApproachAngle(Plate loc height, Rel height), HorzApproachAngle (Rel Side, Plate Loc side)
-- Flip Relside(normalize lefties & righties)
-- strike zone normalization based on plate_loc height and plate_loc side
-- Make data cleaning pipeline, one for pitching data, the other for hitting data
-- Start trying models
+- ~~Keep Vertical, HorzBreak, SpinRate, RelHeight unmodified~~
+- ~~Normalize ApproachAngle(Plate loc height, Rel height), HorzApproachAngle (Rel Side, Plate Loc side)~~
+- ~~Flip Relside(normalize lefties & righties)~~
+- ~~Make data cleaning pipeline, one for pitching data, the other for hitting data~~
+- Feature Engineering
+- Whiff Prediction
 
 Random ideas:
 
-- What if we trained a model that would predict ExitSpeed, Angle, Direction, HitSpinRate for even the ball pitches, 
-and if that model generalizes well with stuff to be able to impute hit characteristics for even the balls thrown? 
-- To add on the above point ^ if we trained a model using the data with hits to predict the contact, as well train a model 
-or in the same model to predict the percent chance for a swinging strike. Then we could interpolate the data for balls and non contact
-pitch calls, and use that as a response variable to calculate Stuff+. For actual hits/whiffs, we could just set the percentage chance to whiff 
-as 100% or use the real hit data. Somehow we would combine the two columns(Hit characteritics and P(Whiff)) to make a new hybrid statistic
+- Should engineer new features and interactions 
+- Iteractions: PitcherThrows x Batterside, PlatelocSide x Batterside, PlatelocHeight x PitchType, RelSide x Extension, RelSpeed x Zone Time
+- Deception/Tunneling: Score that shows how close the pitchers are tunneled with the pitcher's other pitches, consistency score for the pitches, perceived velo drop (effectivevelo - rel speed),
+  Appr Angle/Horz Angle deviation(vert appr angle - horz rel angle)
+  Break direction angle: atan2(HorzBreak, InducedVerticalBreak)
+- Fatigue: PitchNo - PitchofPA, SpeedDrop / RelSpeed
+- Previous Pitch Type context
+- Batter context
+- Zone context: buckets, edge of the zone, chase zone
+- Count leverage: Strikes - Balls
 
-    
     
