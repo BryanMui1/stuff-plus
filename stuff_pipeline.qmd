@@ -852,45 +852,45 @@ plot_approach_angles(chg_angles, main_chg, "Changeup")
 # Uncomment this section to test the code quickly
 # This runs only 2-3 models per pitch type for quick validation
 
-# Test Fastball Normalization (2-3 models, ~5-10 minutes)
-# fb_test <- train_pitch_normalization_fb(
-#   main_fb, 
-#   "Fastball", 
-#   verbose = FALSE, 
-#   grid_type = "test", 
-#   cv_folds = 3, 
-#   parallel = TRUE
-# )
+Test Fastball Normalization (2-3 models, ~5-10 minutes)
+fb_test <- train_pitch_normalization_fb(
+  main_fb,
+  "Fastball",
+  verbose = FALSE,
+  grid_type = "test",
+  cv_folds = 3,
+  parallel = TRUE
+)
 
 # Test Slider Normalization (2-3 models, ~5-10 minutes)
-# sl_test <- train_pitch_normalization_breaking_balls(
-#   main_sl, 
-#   "Slider", 
-#   verbose = FALSE, 
-#   grid_type = "test", 
-#   cv_folds = 3, 
-#   parallel = TRUE
-# )
+sl_test <- train_pitch_normalization_breaking_balls(
+  main_sl,
+  "Slider",
+  verbose = FALSE,
+  grid_type = "test",
+  cv_folds = 3,
+  parallel = TRUE
+)
 
 # Test Curveball Normalization (2-3 models, ~5-10 minutes)
-# cv_test <- train_pitch_normalization_breaking_balls(
-#   main_cv, 
-#   "Curveball", 
-#   verbose = FALSE, 
-#   grid_type = "test", 
-#   cv_folds = 3, 
-#   parallel = TRUE
-# )
+cv_test <- train_pitch_normalization_breaking_balls(
+  main_cv,
+  "Curveball",
+  verbose = FALSE,
+  grid_type = "test",
+  cv_folds = 3,
+  parallel = TRUE
+)
 
 # Test Changeup Normalization (2-3 models, ~5-10 minutes)
-# chg_test <- train_pitch_normalization_breaking_balls(
-#   main_chg, 
-#   "Changeup", 
-#   verbose = FALSE, 
-#   grid_type = "test", 
-#   cv_folds = 3, 
-#   parallel = TRUE
-# )
+chg_test <- train_pitch_normalization_breaking_balls(
+  main_chg,
+  "Changeup",
+  verbose = FALSE,
+  grid_type = "test",
+  cv_folds = 3,
+  parallel = TRUE
+)
 
 cat("Test mode completed! If everything works, you can run the full pipeline.\n")
 ```
