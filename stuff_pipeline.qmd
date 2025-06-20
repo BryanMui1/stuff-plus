@@ -1,5 +1,5 @@
 ---
-title: "stuff_pipeline"
+title: "Baseball Pitch Analysis Pipeline"
 execute:
   cache: true
 format:
@@ -13,335 +13,968 @@ format:
          \DefineVerbatimEnvironment{OutputCode}{Verbatim}{breaklines,commandchars=\\\{\}}
 ---
 
-Stuff pipeline: Reads in the csv, outputs a cleaned dataset 
-
-Combining the Datasets
-```{r}
+```{r setup, include=FALSE}
+# Set random seed for reproducibility
 set.seed(777)
-library(tidyverse)
-library(xgboost)
-library(caret)
-library(recipes)
-library(mgcv)
-library(ggplot2)
-library(GGally)
 
-# Path-to-data, /data/datasets.csv
-ucla <- read_csv("./data/UCLA2023-2024.csv")
+# Load required libraries
+library(tidyverse)    # Data manipulation and visualization
+library(xgboost)      # Gradient boosting
+library(caret)        # Machine learning tools
+library(recipes)      # Feature engineering
+library(mgcv)        # GAM models
+library(ggplot2)     # Plotting
+library(GGally)      # Correlation plots
+
+# Parallel Computing Setup
+library(parallel)
+library(doParallel)
+library(foreach)
+
+# Detect number of CPU cores
+num_cores <- detectCores()
+cat("Detected", num_cores, "CPU cores\n")
+
+# Set up parallel backend
+# Use 75% of available cores to leave some for system processes
+cores_to_use <- max(1, floor(num_cores * 0.75))
+cat("Using", cores_to_use, "cores for parallel processing\n")
+
+# Register parallel backend
+cl <- makeCluster(cores_to_use)
+registerDoParallel(cl)
+
+# Set caret to use parallel processing
+library(caret)
+caret::registerDoParallel(cl)
+
+cat("Parallel computing setup complete!\n")
+cat("You can now run grid searches with parallel = TRUE\n")
+```
+
+# Data Loading and Initial Cleaning
+
+## Load Raw Data
+```{r load-data}
+# Load data from different schools
+ucla <- read_csv("./data/UCLA2023-2024.csv") %>%
+  mutate(Date = as.Date(Date),
+         UTCDate = as.Date(UTCDate),
+         AwayTeamForeignID = as.character(AwayTeamForeignID))
+
 penn <- read_csv("./data/PennState2024.csv")
 purdue <- read_csv("./data/Purdue2024.csv")
 michigan <- read_csv("./data/Michigan2024.csv")
 
-# Need to convert from character to date object
-ucla <- ucla %>%
-  mutate(Date = as.Date(Date)) %>%
-  mutate(UTCDate = as.Date(UTCDate)) %>%
-  mutate(AwayTeamForeignID = as.character(AwayTeamForeignID))
-
-# The data set that we will be mutating
+# Combine all datasets
 main <- bind_rows(ucla, penn, michigan, purdue)
 ```
 
-Cleaning:
-```{r}
+## Select and Clean Variables
+```{r clean-data}
+# Define variables of interest
 filtered_vars <- c(
-  "Pitcher",
-  "PitcherId",
-  "PitcherThrows",
-  "TaggedPitchType",
-  "RelSpeed",           # Speed at release
-  "ZoneSpeed",          # Speed at the plate
-  "EffectiveVelo",      # Perceived pitch speed
-  "ZoneTime",           # Time to reach plate
-  "SpeedDrop",          # Velo loss from release to plate
-  "VertBreak",          # Full vertical break
-  "InducedVertBreak",   # Break excluding gravity
-  "HorzBreak",          # Horizontal movement
-  "SpinRate",           # Raw spin
-  "SpinAxis",           # 0–360 spin axis
-  "RelHeight",          # Release height
-  "RelSide",            # Horizontal release side
-  "Extension",          # Distance toward plate
-  "VertApprAngle",      # Vertical approach angle
-  "HorzApprAngle",      # Horizontal approach angle
-  "VertRelAngle",       # Vertical release angle
-  "HorzRelAngle",       # Horizontal release angle
-  "PlateLocHeight",     # Raw vertical location
-  "PlateLocSide",       # Raw horizontal location
-  "Balls",              # Balls
-  "Strikes",            # Strikes
-  "Inning",
-  "Outs",               # Outs
-  "Batter",
-  "BatterTeam",
-  "BatterSide",         # Bats L/R
-  "PAofInning",         # Plate Appearance of Inning
-  "PitchofPA",          # Pitch of Plate Appearance
-  "PitchNo",            # Pitch number of the game
-  "PitchReleaseConfidence", # Trackman tracking confidence level
-  "PitchLocationConfidence", # Trackman tracking confidence level
-  "PitchMovementConfidence" # Trackman tracking confidence level
+  # Pitcher Information
+  "Pitcher", "PitcherId", "PitcherThrows", "TaggedPitchType",
+  
+  # Velocity Metrics
+  "RelSpeed", "ZoneSpeed", "EffectiveVelo", "ZoneTime", "SpeedDrop",
+  
+  # Movement Metrics
+  "VertBreak", "InducedVertBreak", "HorzBreak",
+  
+  # Spin Metrics
+  "SpinRate", "SpinAxis",
+  
+  # Release Metrics
+  "RelHeight", "RelSide", "Extension",
+  
+  # Approach Angles
+  "VertApprAngle", "HorzApprAngle", "VertRelAngle", "HorzRelAngle",
+  
+  # Location
+  "PlateLocHeight", "PlateLocSide",
+  
+  # Game Situation
+  "Balls", "Strikes", "Inning", "Outs",
+  
+  # Batter Information
+  "Batter", "BatterTeam", "BatterSide",
+  
+  # Sequence Information
+  "PAofInning", "PitchofPA", "PitchNo",
+  
+  # Quality Metrics
+  "PitchReleaseConfidence", "PitchLocationConfidence", "PitchMovementConfidence"
 )
 
-main %>%
+# Check for missing values
+missing_summary <- main %>%
   select(all_of(filtered_vars)) %>%
   summarise(across(everything(), ~sum(is.na(.)))) %>%
   pivot_longer(everything(), names_to = "column", values_to = "na_count") %>%
   arrange(desc(na_count))
 
+print("Missing value summary:")
+print(missing_summary)
+
+# Clean the dataset
 main <- main %>%
   drop_na(all_of(filtered_vars)) %>%
   arrange(UTCDateTime, PitchNo)
 ```
 
+# Feature Engineering
 
-Variable Transformations:
-```{r}
-# Creating an ID
+## Basic Transformations
+```{r feature-engineering}
 main <- main %>%
-  mutate(DatasetID = 1:n()) %>% # making IDs
-  relocate(DatasetID, .before=PitchNo) %>%
+  # Create unique identifier
+  mutate(DatasetID = 1:n()) %>%
+  relocate(DatasetID, .before = PitchNo) %>%
+  
+  # Transform spin axis to circular components
   mutate(
     SpinAxis_rad = SpinAxis * pi / 180,
     SpinAxis_sin = sin(SpinAxis_rad),
-    SpinAxis_cos = cos(SpinAxis_rad),
+    SpinAxis_cos = cos(SpinAxis_rad)
   ) %>%
-  relocate(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos, .after=SpinAxis) %>% # Spin Axis to sin/cos component %>% 
-  # mutate(
-  #   BatterSide = ifelse(BatterSide == "Right", 1, 0),
-  #   PitcherThrows = ifelse(PitcherThrows == "Right", 1, 0)
-  # ) %>%
-  # mutate(BatterSide = factor(BatterSide)) %>% # Batterside and PitcherThrows to binary: 1 - right 0 - left
-  mutate(Count = factor(paste0(Balls, "-", Strikes))) %>%
-  relocate(Count, .after=Strikes) %>% # Creating a factor of counts
-  # mutate(Outs = factor(Outs), Inning = factor(Inning)) %>% # Creating a factor for outs and innings
-  mutate(RelSide = abs(RelSide)) # Standardize the rel-side for righties and lefties
+  relocate(SpinAxis_rad, SpinAxis_sin, SpinAxis_cos, .after = SpinAxis) %>%
+  
+  # Create count factor and standardize release side
+  mutate(
+    Count = factor(paste0(Balls, "-", Strikes)),
+    RelSide = abs(RelSide)  # Standardize release side for both RHP/LHP
+  ) %>%
+  relocate(Count, .after = Strikes)
+
+# Save processed dataset
+write_csv(main, "./data/stuff_data_full_raw.csv")
 ```
 
+# Pitch-Specific Analysis
 
-```{r}
-head(main)
-write_csv(main, "stuff_data_full_raw.csv")
+## Helper Functions
+```{r helper-functions}
+# Function to prepare approach angle data
+prepare_approach_angles <- function(data) {
+  # Vertical approach angle data
+  vaa_df <- data %>%
+    select(VertApprAngle, RelHeight, PlateLocHeight)
+  vaa_recipe <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
+    step_normalize(all_numeric_predictors())
+  vaa_prep <- prep(vaa_recipe)
+  vaa_std <- bake(vaa_prep, new_data = NULL)
+  
+  # Horizontal approach angle data
+  haa_df <- data %>%
+    select(HorzApprAngle, RelSide, PlateLocSide)
+  haa_recipe <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
+    step_normalize(all_numeric_predictors())
+  haa_prep <- prep(haa_recipe)
+  haa_std <- bake(haa_prep, new_data = NULL)
+  
+  list(
+    vaa = vaa_std,
+    haa = haa_std
+  )
+}
+
+# Function to plot approach angle relationships
+plot_approach_angles <- function(std_data, pitch_data, pitch_type) {
+  std_data$vaa$PitcherSide <- factor(pitch_data$PitcherThrows)
+  std_data$haa$PitcherSide <- factor(pitch_data$PitcherThrows)
+  
+  cat(paste("\nAnalyzing", pitch_type, "Approach Angles\n"))
+  
+  # Vertical approach angle plots
+  print(ggpairs(std_data$vaa, 
+                aes(color = PitcherSide),
+                progress = FALSE,
+                title = paste(pitch_type, "- Vertical Approach Angle")))
+  
+  # Horizontal approach angle plots
+  print(ggpairs(std_data$haa, 
+                aes(color = PitcherSide),
+                progress = FALSE,
+                title = paste(pitch_type, "- Horizontal Approach Angle")))
+}
+
+#' Create Tuning Grid for XGBoost Models
+#' 
+#' Creates a comprehensive tuning grid optimized for large datasets (~60k observations).
+#' The grid is designed to balance computational efficiency with model performance.
+#' 
+#' @param grid_type Character string specifying the grid type:
+#'   - "comprehensive": Full grid search (computationally expensive)
+#'   - "balanced": Moderate grid search (recommended for 60k observations)
+#'   - "quick": Minimal grid search (for testing)
+#'   - "test": Ultra-minimal grid search (2-3 models for code testing)
+#' @param n_obs Number of observations in the dataset (used to adjust grid size)
+#' 
+#' @return A data frame with tuning parameters for XGBoost
+#' 
+#' @examples
+#' tune_grid <- create_xgb_tuning_grid("balanced", n_obs = 60000)
+create_xgb_tuning_grid <- function(grid_type = "balanced", n_obs = 60000) {
+  
+  if (grid_type == "comprehensive") {
+    # Full grid search - most thorough parameter exploration
+    tune_grid <- expand.grid(
+      nrounds = c(100, 200, 300, 500, 750, 1000),
+      max_depth = c(2, 3, 4, 5, 6, 7, 8),
+      eta = c(0.01, 0.03, 0.05, 0.1, 0.15, 0.2, 0.3),
+      gamma = c(0, 0.1, 0.2, 0.5, 1.0),
+      colsample_bytree = c(0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+      min_child_weight = c(1, 2, 3, 5, 7, 10),
+      subsample = c(0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+    )
+  } else if (grid_type == "balanced") {
+    # Balanced grid - expanded for better performance
+    tune_grid <- expand.grid(
+      nrounds = c(100, 200, 300, 500),
+      max_depth = c(3, 4, 5, 6, 7),
+      eta = c(0.03, 0.05, 0.1, 0.15, 0.2),
+      gamma = c(0, 0.1, 0.2, 0.5),
+      colsample_bytree = c(0.6, 0.7, 0.8, 0.9, 1.0),
+      min_child_weight = c(2, 3, 5, 7),
+      subsample = c(0.6, 0.7, 0.8, 0.9, 1.0)
+    )
+  } else if (grid_type == "quick") {
+    # Quick grid - for testing and development
+    tune_grid <- expand.grid(
+      nrounds = c(100, 200, 300),
+      max_depth = c(3, 4, 5),
+      eta = c(0.1, 0.2),
+      gamma = c(0, 0.1),
+      colsample_bytree = c(0.8, 1.0),
+      min_child_weight = c(3, 5),
+      subsample = c(0.8, 1.0)
+    )
+  } else if (grid_type == "test") {
+    # Test grid - ultra-minimal for quick code testing (2-3 models)
+    tune_grid <- expand.grid(
+      nrounds = c(100, 200),
+      max_depth = c(3, 4),
+      eta = c(0.1),
+      gamma = c(0),
+      colsample_bytree = c(1.0),
+      min_child_weight = c(5),
+      subsample = c(0.8)
+    )
+  } else {
+    stop("grid_type must be 'comprehensive', 'balanced', 'quick', or 'test'")
+  }
+  
+  # Adjust grid size based on number of observations
+  if (n_obs < 10000) {
+    # For smaller datasets, reduce grid size
+    tune_grid <- tune_grid[sample(nrow(tune_grid), min(30, nrow(tune_grid))), ]
+  } else if (n_obs > 100000) {
+    # For very large datasets, use comprehensive grid
+    tune_grid <- expand.grid(
+      nrounds = c(100, 200, 300, 500, 750),
+      max_depth = c(3, 4, 5, 6, 7, 8),
+      eta = c(0.01, 0.03, 0.05, 0.1, 0.15, 0.2),
+      gamma = c(0, 0.1, 0.2, 0.5),
+      colsample_bytree = c(0.6, 0.7, 0.8, 0.9, 1.0),
+      min_child_weight = c(2, 3, 5, 7, 10),
+      subsample = c(0.6, 0.7, 0.8, 0.9, 1.0)
+    )
+  }
+  
+  cat("Created tuning grid with", nrow(tune_grid), "combinations\n")
+  return(tune_grid)
+}
+
+#' Create Train Control for Cross-Validation
+#' 
+#' Creates train control object optimized for the dataset size and computational resources.
+#' 
+#' @param cv_folds Number of cross-validation folds (default: 5 for 60k observations)
+#' @param cv_repeats Number of CV repeats (default: 2 for stability)
+#' @param verbose Logical. If TRUE, shows progress during training
+#' @param parallel Logical. If TRUE, enables parallel processing
+#' 
+#' @return A trainControl object
+#' 
+#' @examples
+#' train_control <- create_train_control(cv_folds = 5, verbose = FALSE)
+create_train_control <- function(cv_folds = 5, cv_repeats = 2, verbose = FALSE, parallel = FALSE) {
+  
+  # Adjust CV folds based on dataset size
+  if (cv_folds > 10) {
+    warning("CV folds reduced to 10 for computational efficiency")
+    cv_folds <- 10
+  }
+  
+  train_control <- trainControl(
+    method = "repeatedcv",
+    number = cv_folds,
+    repeats = cv_repeats,
+    verboseIter = verbose,
+    returnResamp = "all",
+    savePredictions = TRUE,
+    allowParallel = parallel
+  )
+  
+  return(train_control)
+}
+
+#' Print Model Comparison Table
+#' 
+#' Creates and prints a comparison table of XGBoost model results.
+#' 
+#' @param model_results Results from caret train function
+#' @param model_name Character string for the model name
+#' @param top_n Number of top models to display
+#' 
+#' @return A formatted data frame with model comparisons
+print_model_comparison <- function(model_results, model_name, top_n = 10) {
+  
+  # Extract results and add model name
+  results_df <- model_results$results %>%
+    mutate(Model = model_name) %>%
+    arrange(RMSE) %>%
+    select(Model, RMSE, Rsquared, MAE, nrounds, max_depth, eta, gamma, 
+           colsample_bytree, min_child_weight, subsample)
+  
+  # Print summary
+  cat(paste("\n=== Top", min(top_n, nrow(results_df)), "Models for", model_name, "===\n"))
+  print(head(results_df, top_n))
+  
+  # Print best model details
+  cat(paste("\nBest", model_name, "Model:\n"))
+  best_model <- results_df[1, ]
+  print(best_model)
+  
+  return(results_df)
+}
+
+#' Train Normalization Models for Fastballs
+#' 
+#' Trains GAM and XGBoost models for vertical approach angle normalization and XGBoost for horizontal approach angle.
+#' Automatically selects the better performing model (GAM vs XGBoost) for vertical approach angle based on R-squared.
+#' 
+#' @param pitch_data A data frame containing pitch data with required columns:
+#'   - VertApprAngle: Vertical approach angle
+#'   - HorzApprAngle: Horizontal approach angle  
+#'   - RelHeight: Release height
+#'   - PlateLocHeight: Plate location height
+#'   - RelSide: Release side (absolute value)
+#'   - PlateLocSide: Plate location side
+#' @param pitch_type Character string specifying the pitch type (e.g., "Fastball")
+#' @param verbose Logical. If TRUE, prints detailed progress information and model summaries
+#' @param grid_type Character string for tuning grid ("comprehensive", "balanced", "quick")
+#' @param cv_folds Number of cross-validation folds
+#' @param parallel Logical. If TRUE, enables parallel processing
+#' 
+#' @return A list containing:
+#'   - data: data.frame - Original data with added normalized columns (HorzApprAngle_n, VertApprAngle_n)
+#'   - vaa_model: The chosen model object (either GAM or XGBoost) for vertical approach angle
+#'   - vaa_model_type: character - "GAM" or "XGBoost" indicating which model was selected
+#'   - haa_xgb: train object - XGBoost model for horizontal approach angle
+#'   - vaa_predictions: numeric vector - Predicted values for vertical approach angle
+#'   - haa_predictions: numeric vector - Predicted values for horizontal approach angle
+#'   - gam_r2: numeric - R-squared value for GAM model
+#'   - xgb_r2: numeric - R-squared value for XGBoost model
+#'   - tuning_results: data.frame - Cross-validation results for model selection
+#'   - model_comparisons: list - Model comparison tables
+#' 
+#' @examples
+#' fb_results <- train_pitch_normalization_fb(main_fb, "Fastball", verbose = FALSE, grid_type = "balanced")
+#' main_fb <- fb_results$data
+#' 
+#' @importFrom mgcv gam
+#' @importFrom caret train trainControl
+#' @importFrom recipes recipe step_normalize prep bake
+#' @importFrom dplyr select mutate relocate
+train_pitch_normalization_fb <- function(pitch_data, pitch_type, verbose = FALSE, 
+                                       grid_type = "balanced", cv_folds = 5, parallel = FALSE) {
+  # Input validation
+  required_cols <- c("VertApprAngle", "HorzApprAngle", "RelHeight", "PlateLocHeight", "RelSide", "PlateLocSide")
+  missing_cols <- setdiff(required_cols, names(pitch_data))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
+  }
+  
+  if (nrow(pitch_data) == 0) {
+    stop("pitch_data is empty")
+  }
+  
+  if (verbose) cat(paste("\n=== Training normalization models for", pitch_type, "===\n"))
+  if (verbose) cat("Dataset size:", nrow(pitch_data), "observations\n")
+  
+  # Prepare data for normalization
+  vaa_df <- pitch_data %>%
+    select(VertApprAngle, RelHeight, PlateLocHeight)
+  
+  haa_df <- pitch_data %>%
+    select(HorzApprAngle, RelSide, PlateLocSide)
+  
+  # Normalize data for GAM
+  rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
+    step_normalize(all_numeric_predictors())
+  rec_prepped <- prep(rec)
+  vaa_df_std <- bake(rec_prepped, new_data = NULL)
+  
+  # Train GAM model for vertical approach angle
+  if (verbose) cat("Training GAM model for vertical approach angle...\n")
+  vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, 
+                 data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
+  
+  # Create tuning grid and train control
+  tune_grid <- create_xgb_tuning_grid(grid_type, n_obs = nrow(pitch_data))
+  train_control <- create_train_control(cv_folds = cv_folds, verbose = FALSE, parallel = parallel)
+  
+  # Train XGBoost model for vertical approach angle
+  if (verbose) cat("Training XGBoost model for vertical approach angle with", nrow(tune_grid), "parameter combinations...\n")
+  vaa_xgb <- train(
+    VertApprAngle ~ .,
+    data = vaa_df,
+    method = "xgbTree",
+    trControl = train_control,
+    tuneGrid = tune_grid,
+    metric = "RMSE",
+    verbosity = 0
+  )
+  
+  # Compare R-squared values
+  gam_r2 <- summary(vaa_gam)$r.sq
+  xgb_r2 <- vaa_xgb$results$Rsquared[1]  # Get R-squared from CV results
+  
+  if (verbose) {
+    cat("Model Comparison for Vertical Approach Angle:\n")
+    cat("GAM R-squared:", round(gam_r2, 4), "\n")
+    cat("XGBoost R-squared:", round(xgb_r2, 4), "\n")
+    cat("Best XGBoost parameters:", paste(names(vaa_xgb$bestTune), vaa_xgb$bestTune, collapse = ", "), "\n")
+    cat("Using", ifelse(xgb_r2 > gam_r2, "XGBoost", "GAM"), "model for vertical approach angle\n")
+  }
+  
+  # Choose the better model for vertical approach angle
+  if (xgb_r2 > gam_r2) {
+    vaa_model <- vaa_xgb
+    vaa_model_type <- "XGBoost"
+    if (verbose) {
+      cat("XGBoost Model Summary:\n")
+      print(vaa_xgb)
+    }
+  } else {
+    vaa_model <- vaa_gam
+    vaa_model_type <- "GAM"
+    if (verbose) {
+      cat("GAM Model Summary:\n")
+      print(summary(vaa_gam))
+      plot(vaa_gam, pages = 1, main = paste(pitch_type, "- GAM Model"))
+    }
+  }
+  
+  # Train XGBoost model for horizontal approach angle
+  if (verbose) cat("Training XGBoost model for horizontal approach angle...\n")
+  haa_xgb <- train(
+    HorzApprAngle ~ .,
+    data = haa_df,
+    method = "xgbTree",
+    trControl = train_control,
+    tuneGrid = tune_grid,
+    metric = "RMSE",
+    verbosity = 0
+  )
+  
+  if (verbose) {
+    cat("Horizontal XGBoost Model Summary:\n")
+    print(haa_xgb)
+    cat("Best horizontal XGBoost parameters:", paste(names(haa_xgb$bestTune), haa_xgb$bestTune, collapse = ", "), "\n")
+  }
+  
+  # Generate model comparison tables
+  vaa_comparison <- print_model_comparison(vaa_xgb, paste(pitch_type, "Vertical Approach Angle"), top_n = 10)
+  haa_comparison <- print_model_comparison(haa_xgb, paste(pitch_type, "Horizontal Approach Angle"), top_n = 10)
+  
+  # Generate predictions
+  if (verbose) cat("Generating predictions and creating normalized variables...\n")
+  
+  # Generate vertical predictions based on chosen model
+  vert_hat <- predict(vaa_model, newdata = vaa_df %>% select(RelHeight, PlateLocHeight))
+  horz_hat <- predict(haa_xgb, newdata = haa_df %>% select(RelSide, PlateLocSide))
+  
+  # Add normalized approach angles to dataset
+  pitch_data_normalized <- pitch_data %>%
+    mutate(
+      HorzApprAngle_n = as.numeric(HorzApprAngle - horz_hat),
+      VertApprAngle_n = as.numeric(VertApprAngle - vert_hat)
+    ) %>%
+    relocate(HorzApprAngle_n, VertApprAngle_n, .before = VertApprAngle)
+  
+  # Print summary statistics
+  if (verbose) {
+    cat("\nNormalized Value Summary:\n")
+    cat("Horizontal Approach Angle Normalized:\n")
+    print(summary(pitch_data_normalized$HorzApprAngle_n))
+    cat("Vertical Approach Angle Normalized:\n")
+    print(summary(pitch_data_normalized$VertApprAngle_n))
+  }
+  
+  # Return list with normalized data and models
+  return(list(
+    data = pitch_data_normalized,
+    vaa_model = vaa_model,
+    vaa_model_type = vaa_model_type,
+    haa_xgb = haa_xgb,
+    vaa_predictions = vert_hat,
+    haa_predictions = horz_hat,
+    gam_r2 = gam_r2,
+    xgb_r2 = xgb_r2,
+    tuning_results = list(
+      vaa_tuning = vaa_xgb$results,
+      haa_tuning = haa_xgb$results
+    ),
+    model_comparisons = list(
+      vaa_comparison = vaa_comparison,
+      haa_comparison = haa_comparison
+    )
+  ))
+}
+
+#' Train Normalization Models for Breaking Balls (Sliders, Curveballs, Changeups)
+#' 
+#' Trains separate models for left-handed and right-handed pitchers for horizontal approach angle,
+#' and automatically selects the better performing model (GAM vs XGBoost) for vertical approach angle.
+#' This function handles the different trends between lefties and righties for breaking balls.
+#' 
+#' @param pitch_data A data frame containing pitch data with required columns:
+#'   - VertApprAngle: Vertical approach angle
+#'   - HorzApprAngle: Horizontal approach angle  
+#'   - RelHeight: Release height
+#'   - PlateLocHeight: Plate location height
+#'   - RelSide: Release side (absolute value)
+#'   - PlateLocSide: Plate location side
+#'   - PitcherThrows: Pitcher handedness ("Left" or "Right")
+#' @param pitch_type Character string specifying the pitch type (e.g., "Slider", "Curveball", "Changeup")
+#' @param verbose Logical. If TRUE, prints detailed progress information and model summaries
+#' @param grid_type Character string for tuning grid ("comprehensive", "balanced", "quick")
+#' @param cv_folds Number of cross-validation folds
+#' @param parallel Logical. If TRUE, enables parallel processing
+#' 
+#' @return A list containing:
+#'   - data: data.frame - Original data with added normalized columns (HorzApprAngle_n, VertApprAngle_n)
+#'   - vaa_model: The chosen model object (either GAM or XGBoost) for vertical approach angle
+#'   - vaa_model_type: character - "GAM" or "XGBoost" indicating which model was selected
+#'   - xgb_model_lefty: train object or NULL - XGBoost model for left-handed pitchers (NULL if no lefties)
+#'   - xgb_model_righty: train object or NULL - XGBoost model for right-handed pitchers (NULL if no righties)
+#'   - vaa_predictions: numeric vector - Predicted values for vertical approach angle
+#'   - haa_predictions: numeric vector - Predicted values for horizontal approach angle
+#'   - gam_r2: numeric - R-squared value for GAM model
+#'   - xgb_r2: numeric - R-squared value for XGBoost model
+#'   - tuning_results: list - Cross-validation results for all models
+#'   - model_comparisons: list - Model comparison tables for all models
+#' 
+#' @examples
+#' sl_results <- train_pitch_normalization_breaking_balls(main_sl, "Slider", verbose = FALSE, grid_type = "balanced")
+#' main_sl <- sl_results$data
+#' 
+#' @importFrom mgcv gam
+#' @importFrom caret train trainControl
+#' @importFrom recipes recipe step_normalize prep bake
+#' @importFrom dplyr select mutate relocate filter
+train_pitch_normalization_breaking_balls <- function(pitch_data, pitch_type, verbose = FALSE, 
+                                                   grid_type = "balanced", cv_folds = 5, parallel = FALSE) {
+  # Input validation
+  required_cols <- c("VertApprAngle", "HorzApprAngle", "RelHeight", "PlateLocHeight", 
+                     "RelSide", "PlateLocSide", "PitcherThrows")
+  missing_cols <- setdiff(required_cols, names(pitch_data))
+  if (length(missing_cols) > 0) {
+    stop("Missing required columns: ", paste(missing_cols, collapse = ", "))
+  }
+  
+  if (nrow(pitch_data) == 0) {
+    stop("pitch_data is empty")
+  }
+  
+  # Check for valid pitcher handedness values
+  valid_throws <- unique(pitch_data$PitcherThrows)
+  if (!all(valid_throws %in% c("Left", "Right"))) {
+    warning("Unexpected values in PitcherThrows: ", paste(valid_throws, collapse = ", "))
+  }
+  
+  if (verbose) cat(paste("\n=== Training normalization models for", pitch_type, "===\n"))
+  if (verbose) cat("Dataset size:", nrow(pitch_data), "observations\n")
+  
+  # Prepare data for normalization
+  vaa_df <- pitch_data %>%
+    select(VertApprAngle, RelHeight, PlateLocHeight)
+  
+  # Separate data for lefties and righties
+  haa_lefty <- pitch_data %>%
+    filter(PitcherThrows == "Left") %>%
+    select(HorzApprAngle, RelSide, PlateLocSide)
+  
+  haa_righty <- pitch_data %>%
+    filter(PitcherThrows == "Right") %>%
+    select(HorzApprAngle, RelSide, PlateLocSide)
+  
+  if (verbose) {
+    cat("Data split by pitcher handedness:\n")
+    cat("Left-handed pitchers:", nrow(haa_lefty), "observations\n")
+    cat("Right-handed pitchers:", nrow(haa_righty), "observations\n")
+  }
+  
+  # Check if we have enough data for both groups
+  if (nrow(haa_lefty) == 0 && nrow(haa_righty) == 0) {
+    stop("No valid pitcher handedness data found")
+  }
+  
+  # Normalize data for GAM
+  rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
+    step_normalize(all_numeric_predictors())
+  rec_prepped <- prep(rec)
+  vaa_df_std <- bake(rec_prepped, new_data = NULL)
+  
+  # Train GAM model for vertical approach angle
+  if (verbose) cat("Training GAM model for vertical approach angle...\n")
+  vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, 
+                 data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
+  
+  # Create tuning grid and train control
+  tune_grid <- create_xgb_tuning_grid(grid_type, n_obs = nrow(pitch_data))
+  train_control <- create_train_control(cv_folds = cv_folds, verbose = FALSE, parallel = parallel)
+  
+  # Train XGBoost model for vertical approach angle
+  if (verbose) cat("Training XGBoost model for vertical approach angle with", nrow(tune_grid), "parameter combinations...\n")
+  vaa_xgb <- train(
+    VertApprAngle ~ .,
+    data = vaa_df,
+    method = "xgbTree",
+    trControl = train_control,
+    tuneGrid = tune_grid,
+    metric = "RMSE",
+    verbosity = 0
+  )
+  
+  # Compare R-squared values
+  gam_r2 <- summary(vaa_gam)$r.sq
+  xgb_r2 <- vaa_xgb$results$Rsquared[1]  # Get R-squared from CV results
+  
+  if (verbose) {
+    cat("Model Comparison for Vertical Approach Angle:\n")
+    cat("GAM R-squared:", round(gam_r2, 4), "\n")
+    cat("XGBoost R-squared:", round(xgb_r2, 4), "\n")
+    cat("Best XGBoost parameters:", paste(names(vaa_xgb$bestTune), vaa_xgb$bestTune, collapse = ", "), "\n")
+    cat("Using", ifelse(xgb_r2 > gam_r2, "XGBoost", "GAM"), "model for vertical approach angle\n")
+  }
+  
+  # Choose the better model for vertical approach angle
+  if (xgb_r2 > gam_r2) {
+    vaa_model <- vaa_xgb
+    vaa_model_type <- "XGBoost"
+    if (verbose) {
+      cat("XGBoost Model Summary:\n")
+      print(vaa_xgb)
+    }
+  } else {
+    vaa_model <- vaa_gam
+    vaa_model_type <- "GAM"
+    if (verbose) {
+      cat("GAM Model Summary:\n")
+      print(summary(vaa_gam))
+      plot(vaa_gam, pages = 1, main = paste(pitch_type, "- GAM Model"))
+    }
+  }
+  
+  # Train XGBoost models for horizontal approach angle (separate for lefties and righties)
+  if (verbose) cat("Training XGBoost models for horizontal approach angle...\n")
+  
+  # Train model for lefties
+  xgb_model_lefty <- NULL
+  if (nrow(haa_lefty) > 0) {
+    if (verbose) cat("Training XGBoost model for left-handed pitchers...\n")
+    xgb_model_lefty <- train(
+      HorzApprAngle ~ .,
+      data = haa_lefty,
+      method = "xgbTree",
+      trControl = train_control,
+      tuneGrid = tune_grid,
+      metric = "RMSE",
+      verbosity = 0
+    )
+    if (verbose) {
+      cat("Left-handed XGBoost Model Summary:\n")
+      print(xgb_model_lefty)
+      cat("Best lefty XGBoost parameters:", paste(names(xgb_model_lefty$bestTune), xgb_model_lefty$bestTune, collapse = ", "), "\n")
+    }
+  }
+  
+  # Train model for righties
+  xgb_model_righty <- NULL
+  if (nrow(haa_righty) > 0) {
+    if (verbose) cat("Training XGBoost model for right-handed pitchers...\n")
+    xgb_model_righty <- train(
+      HorzApprAngle ~ .,
+      data = haa_righty,
+      method = "xgbTree",
+      trControl = train_control,
+      tuneGrid = tune_grid,
+      metric = "RMSE",
+      verbosity = 0
+    )
+    if (verbose) {
+      cat("Right-handed XGBoost Model Summary:\n")
+      print(xgb_model_righty)
+      cat("Best righty XGBoost parameters:", paste(names(xgb_model_righty$bestTune), xgb_model_righty$bestTune, collapse = ", "), "\n")
+    }
+  }
+  
+  # Generate model comparison tables
+  vaa_comparison <- print_model_comparison(vaa_xgb, paste(pitch_type, "Vertical Approach Angle"), top_n = 10)
+  
+  model_comparisons <- list(vaa_comparison = vaa_comparison)
+  
+  if (!is.null(xgb_model_lefty)) {
+    lefty_comparison <- print_model_comparison(xgb_model_lefty, paste(pitch_type, "Left-handed Horizontal"), top_n = 10)
+    model_comparisons$lefty_comparison <- lefty_comparison
+  }
+  
+  if (!is.null(xgb_model_righty)) {
+    righty_comparison <- print_model_comparison(xgb_model_righty, paste(pitch_type, "Right-handed Horizontal"), top_n = 10)
+    model_comparisons$righty_comparison <- righty_comparison
+  }
+  
+  # Generate predictions
+  if (verbose) cat("Generating predictions and creating normalized variables...\n")
+  
+  # Generate vertical predictions based on chosen model
+  vert_hat <- predict(vaa_model, newdata = vaa_df %>% select(RelHeight, PlateLocHeight))
+  
+  # Generate horizontal predictions based on pitcher handedness
+  horz_hat <- rep(NA, nrow(pitch_data))
+  
+  # Predict for lefties
+  if (!is.null(xgb_model_lefty) && nrow(haa_lefty) > 0) {
+    lefty_indices <- which(pitch_data$PitcherThrows == "Left")
+    if (length(lefty_indices) > 0) {
+      lefty_predictions <- predict(xgb_model_lefty, 
+                                 newdata = pitch_data[lefty_indices, ] %>% 
+                                   select(RelSide, PlateLocSide))
+      horz_hat[lefty_indices] <- lefty_predictions
+    }
+  }
+  
+  # Predict for righties
+  if (!is.null(xgb_model_righty) && nrow(haa_righty) > 0) {
+    righty_indices <- which(pitch_data$PitcherThrows == "Right")
+    if (length(righty_indices) > 0) {
+      righty_predictions <- predict(xgb_model_righty, 
+                                  newdata = pitch_data[righty_indices, ] %>% 
+                                    select(RelSide, PlateLocSide))
+      horz_hat[righty_indices] <- righty_predictions
+    }
+  }
+  
+  # Check if we have any NA predictions
+  na_count <- sum(is.na(horz_hat))
+  if (na_count > 0 && verbose) {
+    warning(na_count, " horizontal predictions are NA - check pitcher handedness data")
+  }
+  
+  # Add normalized approach angles to dataset
+  pitch_data_normalized <- pitch_data %>%
+    mutate(
+      HorzApprAngle_n = as.numeric(HorzApprAngle - horz_hat),
+      VertApprAngle_n = as.numeric(VertApprAngle - vert_hat)
+    ) %>%
+    relocate(HorzApprAngle_n, VertApprAngle_n, .before = VertApprAngle)
+  
+  # Print summary statistics
+  if (verbose) {
+    cat("\nNormalized Value Summary:\n")
+    cat("Horizontal Approach Angle Normalized:\n")
+    print(summary(pitch_data_normalized$HorzApprAngle_n))
+    cat("Vertical Approach Angle Normalized:\n")
+    print(summary(pitch_data_normalized$VertApprAngle_n))
+  }
+  
+  # Return list with normalized data and models
+  return(list(
+    data = pitch_data_normalized,
+    vaa_model = vaa_model,
+    vaa_model_type = vaa_model_type,
+    xgb_model_lefty = xgb_model_lefty,
+    xgb_model_righty = xgb_model_righty,
+    vaa_predictions = vert_hat,
+    haa_predictions = horz_hat,
+    gam_r2 = gam_r2,
+    xgb_r2 = xgb_r2,
+    tuning_results = list(
+      vaa_tuning = vaa_xgb$results,
+      lefty_tuning = if(!is.null(xgb_model_lefty)) xgb_model_lefty$results else NULL,
+      righty_tuning = if(!is.null(xgb_model_righty)) xgb_model_righty$results else NULL
+    ),
+    model_comparisons = model_comparisons
+  ))
+}
 ```
 
-Per Pitch Transformations
-
-Fastball
-```{r}
-main %>% 
+## Analyze Each Pitch Type
+```{r pitch-analysis}
+# Summary of pitch types
+pitch_summary <- main %>% 
   group_by(TaggedPitchType) %>%
   summarise(Count = n()) %>%
   arrange(desc(Count))
-```
 
-```{r}
+print("Pitch type distribution:")
+print(pitch_summary)
+
+# Analyze Fastballs
 main_fb <- main %>% 
-  filter(TaggedPitchType == "Fastball" | TaggedPitchType == "FourSeamFastBall")
+  filter(TaggedPitchType %in% c("Fastball", "FourSeamFastBall"))
+fb_angles <- prepare_approach_angles(main_fb)
+plot_approach_angles(fb_angles, main_fb, "Fastball")
 
-# Training the models for residual normalization
-# Vertical Approach Angle
-vaa_df <- main_fb %>%
-  select(VertApprAngle, RelHeight, PlateLocHeight)
-rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-vaa_df_std <- bake(rec_prepped, new_data = NULL)
+# Analyze Sliders
+main_sl <- main %>% filter(TaggedPitchType == "Slider")
+sl_angles <- prepare_approach_angles(main_sl)
+plot_approach_angles(sl_angles, main_sl, "Slider")
 
-# Subset the data
-haa_df <- main_fb %>%
-  select(HorzApprAngle, RelSide, PlateLocSide)
-rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-haa_df_std <- bake(rec_prepped, new_data = NULL)
+# Analyze Curveballs
+main_cv <- main %>% filter(TaggedPitchType == "Curveball")
+cv_angles <- prepare_approach_angles(main_cv)
+plot_approach_angles(cv_angles, main_cv, "Curveball")
+
+# Analyze Changeups
+main_chg <- main %>% filter(TaggedPitchType == "ChangeUp")
+chg_angles <- prepare_approach_angles(main_chg)
+plot_approach_angles(chg_angles, main_chg, "Changeup")
 ```
 
-```{r}
-vaa_gam <- gam(VertApprAngle ~ s(RelHeight) + PlateLocHeight, data = vaa_df_std %>% select(VertApprAngle, RelHeight, PlateLocHeight))
-summary(vaa_gam)
-plot(vaa_gam, pages = 1)
+## Test Mode (Quick Code Validation)
+```{r test-mode, eval=FALSE}
+# Uncomment this section to test the code quickly
+# This runs only 2-3 models per pitch type for quick validation
 
-train_control <- trainControl(
-  method = "cv",
-  number = 10,
-  verboseIter = TRUE
+# Test Fastball Normalization (2-3 models, ~5-10 minutes)
+# fb_test <- train_pitch_normalization_fb(
+#   main_fb, 
+#   "Fastball", 
+#   verbose = FALSE, 
+#   grid_type = "test", 
+#   cv_folds = 3, 
+#   parallel = TRUE
+# )
+
+# Test Slider Normalization (2-3 models, ~5-10 minutes)
+# sl_test <- train_pitch_normalization_breaking_balls(
+#   main_sl, 
+#   "Slider", 
+#   verbose = FALSE, 
+#   grid_type = "test", 
+#   cv_folds = 3, 
+#   parallel = TRUE
+# )
+
+# Test Curveball Normalization (2-3 models, ~5-10 minutes)
+# cv_test <- train_pitch_normalization_breaking_balls(
+#   main_cv, 
+#   "Curveball", 
+#   verbose = FALSE, 
+#   grid_type = "test", 
+#   cv_folds = 3, 
+#   parallel = TRUE
+# )
+
+# Test Changeup Normalization (2-3 models, ~5-10 minutes)
+# chg_test <- train_pitch_normalization_breaking_balls(
+#   main_chg, 
+#   "Changeup", 
+#   verbose = FALSE, 
+#   grid_type = "test", 
+#   cv_folds = 3, 
+#   parallel = TRUE
+# )
+
+cat("Test mode completed! If everything works, you can run the full pipeline.\n")
+```
+
+## Fastball Normalization
+```{r fastball-normalization}
+# Train normalization models for fastballs (same trend for lefties and righties)
+# Using balanced grid search optimized for 60k observations with parallel processing
+fb_results <- train_pitch_normalization_fb(
+  main_fb, 
+  "Fastball", 
+  verbose = FALSE, 
+  grid_type = "balanced", 
+  cv_folds = 5, 
+  parallel = TRUE
 )
+main_fb <- fb_results$data
+```
 
-tune_grid <- expand.grid(
-  nrounds = 100,
-  max_depth = 3,
-  eta = 0.1,
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = 5,
-  subsample = 0.8
+## Slider Normalization
+```{r slider-normalization}
+# Train normalization models for sliders (separate models for lefties and righties)
+# Using balanced grid search optimized for 60k observations with parallel processing
+sl_results <- train_pitch_normalization_breaking_balls(
+  main_sl, 
+  "Slider", 
+  verbose = FALSE, 
+  grid_type = "balanced", 
+  cv_folds = 5, 
+  parallel = TRUE
 )
+main_sl <- sl_results$data
+```
 
-xgb_model <- train(
-  HorzApprAngle ~ .,
-  data = haa_df,
-  method = "xgbTree",           # caret's XGBoost wrapper
-  trControl = train_control,
-  tuneGrid = tune_grid,
-  metric = "RMSE"               # or MAE
+## Curveball Normalization
+```{r curveball-normalization}
+# Train normalization models for curveballs (separate models for lefties and righties)
+# Using balanced grid search optimized for 60k observations with parallel processing
+cv_results <- train_pitch_normalization_breaking_balls(
+  main_cv, 
+  "Curveball", 
+  verbose = FALSE, 
+  grid_type = "balanced", 
+  cv_folds = 5, 
+  parallel = TRUE
 )
-print(xgb_model)
-
-
-cat("Vertical Approach Angle: \n")
-vert_hat <- predict(vaa_gam, newdata = vaa_df %>% select(RelHeight, PlateLocHeight))
-summary(vert_hat)
-summary(main_fb$VertApprAngle)
-
-cat("Horizontal Approach Angle: \n")
-horz_hat <- predict(xgb_model, newdata = haa_df %>% select(RelSide, PlateLocSide))
-summary(horz_hat)
-summary(main_fb$HorzApprAngle)
-
-main_fb <- main_fb %>%
-  mutate(HorzApprAngle_n = as.numeric(HorzApprAngle - horz_hat),
-         VertApprAngle_n = as.numeric(VertApprAngle - vert_hat)) %>%
-  relocate(HorzApprAngle_n, VertApprAngle_n, .before=VertApprAngle)
-
-cat("Normalized Value Summary: \n")
-cat("Horz: \n")
-summary(main_fb$HorzApprAngle_n)
-cat("Vert: \n")
-summary(main_fb$VertApprAngle_n)
+main_cv <- cv_results$data
 ```
 
-```{r}
-vaa_df_std$PitcherSide <- factor(main_fb$PitcherThrows)
-haa_df_std$PitcherSide <- factor(main_fb$PitcherThrows)
-ggp <- ggpairs(vaa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
-ggp <- ggpairs(haa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
+## Changeup Normalization
+```{r changeup-normalization}
+# Train normalization models for changeups (separate models for lefties and righties)
+# Using balanced grid search optimized for 60k observations with parallel processing
+chg_results <- train_pitch_normalization_breaking_balls(
+  main_chg, 
+  "Changeup", 
+  verbose = FALSE, 
+  grid_type = "balanced", 
+  cv_folds = 5, 
+  parallel = TRUE
+)
+main_chg <- chg_results$data
 ```
 
-```{r}
-write_csv(main_fb, "stuff_data_fastball_transformed.csv")
+# Save All Processed Datasets
+```{r save-datasets}
+# Save all pitch-specific datasets with normalizations
+write_csv(main_fb, "./data/stuff_data_fastball_normalized.csv")
+write_csv(main_sl, "./data/stuff_data_slider_normalized.csv")
+write_csv(main_cv, "./data/stuff_data_curveball_normalized.csv")
+write_csv(main_chg, "./data/stuff_data_changeup_normalized.csv")
+
+cat("All datasets have been saved with normalizations applied.\n")
 ```
 
+# Cleanup Parallel Computing
+```{r cleanup, include=FALSE}
+# Stop parallel cluster
+if (exists("cl")) {
+  stopCluster(cl)
+  cat("Parallel cluster stopped.\n")
+}
 
-Slider
-
-```{r prep-slider}
-main_sl <- main %>% 
-  filter(TaggedPitchType == "Slider")
-
-# Training the models for residual normalization
-# Vertical Approach Angle
-vaa_df <- main_sl %>%
-  select(VertApprAngle, RelHeight, PlateLocHeight)
-rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-vaa_df_std <- bake(rec_prepped, new_data = NULL)
-
-# Horz Appr Angle
-haa_df <- main_sl %>%
-  select(HorzApprAngle, RelSide, PlateLocSide)
-rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-haa_df_std <- bake(rec_prepped, new_data = NULL)
+# Unregister parallel backend
+unregisterDoParallel()
+cat("Parallel computing cleanup complete.\n")
 ```
-
-```{r}
-vaa_df_std$PitcherSide <- factor(main_sl$PitcherThrows)
-haa_df_std$PitcherSide <- factor(main_sl$PitcherThrows)
-ggp <- ggpairs(vaa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
-ggp <- ggpairs(haa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
-```
-
-
-Curveball
-
-```{r prep-curveball}
-main_cv <- main %>% 
-  filter(TaggedPitchType == "Curveball")
-
-# Training the models for residual normalization
-# Vertical Approach Angle
-vaa_df <- main_cv %>%
-  select(VertApprAngle, RelHeight, PlateLocHeight)
-rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-vaa_df_std <- bake(rec_prepped, new_data = NULL)
-
-# Horz Appr Angle
-haa_df <- main_cv %>%
-  select(HorzApprAngle, RelSide, PlateLocSide)
-rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-haa_df_std <- bake(rec_prepped, new_data = NULL)
-```
-
-```{r}
-vaa_df_std$PitcherSide <- factor(main_cv$PitcherThrows)
-haa_df_std$PitcherSide <- factor(main_cv$PitcherThrows)
-summary(vaa_df_std)
-summary(haa_df_std)
-ggp <- ggpairs(vaa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
-ggp <- ggpairs(haa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
-```
-
-
-Changeup
-
-```{r rec-prep-change}
-main_chg <- main %>% 
-  filter(TaggedPitchType == "ChangeUp")
-
-# Training the models for residual normalization
-# Vertical Approach Angle
-vaa_df <- main_chg %>%
-  select(VertApprAngle, RelHeight, PlateLocHeight)
-rec <- recipe(VertApprAngle ~ ., data = vaa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-vaa_df_std <- bake(rec_prepped, new_data = NULL)
-
-# Horz Appr Angle
-haa_df <- main_chg %>%
-  select(HorzApprAngle, RelSide, PlateLocSide)
-rec <- recipe(HorzApprAngle ~ ., data = haa_df) %>%
-  step_normalize(all_numeric_predictors())     # Normalize (center & scale)
-rec_prepped <- prep(rec)
-haa_df_std <- bake(rec_prepped, new_data = NULL)
-```
-
-```{r}
-vaa_df_std$PitcherSide <- factor(main_chg$PitcherThrows)
-haa_df_std$PitcherSide <- factor(main_chg$PitcherThrows)
-summary(vaa_df_std)
-summary(haa_df_std)
-ggp <- ggpairs(vaa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
-ggp <- ggpairs(haa_df_std, 
-        aes(color = PitcherSide),
-        progress = F)
-print(ggp)
-```
-
