@@ -36,8 +36,8 @@ num_cores <- detectCores()
 cat("Detected", num_cores, "CPU cores\n")
 
 # Set up parallel backend
-# Use 75% of available cores to leave some for system processes
-cores_to_use <- max(1, floor(num_cores * 0.75))
+# Use all available cores
+cores_to_use <- num_cores
 cat("Using", cores_to_use, "cores for parallel processing\n")
 
 # Register parallel backend
@@ -45,8 +45,8 @@ cl <- makeCluster(cores_to_use)
 registerDoParallel(cl)
 
 # Set caret to use parallel processing
-library(caret)
-caret::registerDoParallel(cl)
+# library(caret)
+# caret::registerDoParallel(cl)  # REMOVE THIS LINE
 
 cat("Parallel computing setup complete!\n")
 cat("You can now run grid searches with parallel = TRUE\n")
@@ -210,6 +210,7 @@ plot_approach_angles <- function(std_data, pitch_data, pitch_type) {
 #'   - "balanced": Moderate grid search (recommended for 60k observations)
 #'   - "quick": Minimal grid search (for testing)
 #'   - "test": Ultra-minimal grid search (2-3 models for code testing)
+#'   - "colab_4hr": Grid with 28 combinations for Colab ~4hr runtime
 #' @param n_obs Number of observations in the dataset (used to adjust grid size)
 #' 
 #' @return A data frame with tuning parameters for XGBoost
@@ -217,8 +218,18 @@ plot_approach_angles <- function(std_data, pitch_data, pitch_type) {
 #' @examples
 #' tune_grid <- create_xgb_tuning_grid("balanced", n_obs = 60000)
 create_xgb_tuning_grid <- function(grid_type = "balanced", n_obs = 60000) {
-  
-  if (grid_type == "comprehensive") {
+  if (grid_type == "colab_4hr") {
+    # Grid with 28 combinations for Colab ~4hr runtime
+    tune_grid <- expand.grid(
+      nrounds = c(100, 200),
+      max_depth = c(3, 5),
+      eta = c(0.05, 0.1),
+      gamma = c(0, 0.1),
+      colsample_bytree = c(0.8, 1.0),
+      min_child_weight = c(3, 5),
+      subsample = c(0.8)
+    )
+  } else if (grid_type == "comprehensive") {
     # Full grid search - most thorough parameter exploration
     tune_grid <- expand.grid(
       nrounds = c(100, 200, 300, 500, 750, 1000),
@@ -254,8 +265,8 @@ create_xgb_tuning_grid <- function(grid_type = "balanced", n_obs = 60000) {
   } else if (grid_type == "test") {
     # Test grid - ultra-minimal for quick code testing (2-3 models)
     tune_grid <- expand.grid(
-      nrounds = c(100, 200),
-      max_depth = c(3, 4),
+      nrounds = c(100, 300),
+      max_depth = c(3),
       eta = c(0.1),
       gamma = c(0),
       colsample_bytree = c(1.0),
@@ -263,7 +274,7 @@ create_xgb_tuning_grid <- function(grid_type = "balanced", n_obs = 60000) {
       subsample = c(0.8)
     )
   } else {
-    stop("grid_type must be 'comprehensive', 'balanced', 'quick', or 'test'")
+    stop("grid_type must be 'comprehensive', 'balanced', 'quick', 'test', or 'colab_4hr'")
   }
   
   # Adjust grid size based on number of observations
@@ -328,26 +339,22 @@ create_train_control <- function(cv_folds = 5, cv_repeats = 2, verbose = FALSE, 
 #' @param model_results Results from caret train function
 #' @param model_name Character string for the model name
 #' @param top_n Number of top models to display
+#' @param print_output Logical. If TRUE, prints the output
 #' 
 #' @return A formatted data frame with model comparisons
-print_model_comparison <- function(model_results, model_name, top_n = 10) {
-  
-  # Extract results and add model name
+print_model_comparison <- function(model_results, model_name, top_n = 10, print_output = TRUE) {
   results_df <- model_results$results %>%
     mutate(Model = model_name) %>%
     arrange(RMSE) %>%
     select(Model, RMSE, Rsquared, MAE, nrounds, max_depth, eta, gamma, 
            colsample_bytree, min_child_weight, subsample)
-  
-  # Print summary
-  cat(paste("\n=== Top", min(top_n, nrow(results_df)), "Models for", model_name, "===\n"))
-  print(head(results_df, top_n))
-  
-  # Print best model details
-  cat(paste("\nBest", model_name, "Model:\n"))
-  best_model <- results_df[1, ]
-  print(best_model)
-  
+  if (print_output) {
+    cat(paste("\n=== Top", min(top_n, nrow(results_df)), "Models for", model_name, "===\n"))
+    print(head(results_df, top_n))
+    cat(paste("\nBest", model_name, "Model:\n"))
+    best_model <- results_df[1, ]
+    print(best_model)
+  }
   return(results_df)
 }
 
@@ -436,23 +443,31 @@ train_pitch_normalization_fb <- function(pitch_data, pitch_type, verbose = FALSE
     trControl = train_control,
     tuneGrid = tune_grid,
     metric = "RMSE",
-    verbosity = 0
+    verbosity = 0,
+    nthread = 1
   )
   
   # Compare R-squared values
   gam_r2 <- summary(vaa_gam)$r.sq
   xgb_r2 <- vaa_xgb$results$Rsquared[1]  # Get R-squared from CV results
   
+  # Always print GAM summary and XGBoost model comparison table
+  cat("\nGAM Model Summary (Vertical Approach Angle):\n")
+  print(summary(vaa_gam))
+  plot(vaa_gam)
+  invisible(vaa_comparison <- print_model_comparison(vaa_xgb, paste(pitch_type, "Vertical Approach Angle"), top_n = 10, print_output = TRUE))
+
+  # If verbose, print additional details
   if (verbose) {
     cat("Model Comparison for Vertical Approach Angle:\n")
     cat("GAM R-squared:", round(gam_r2, 4), "\n")
     cat("XGBoost R-squared:", round(xgb_r2, 4), "\n")
     cat("Best XGBoost parameters:", paste(names(vaa_xgb$bestTune), vaa_xgb$bestTune, collapse = ", "), "\n")
-    cat("Using", ifelse(xgb_r2 > gam_r2, "XGBoost", "GAM"), "model for vertical approach angle\n")
+    cat("Using ", ifelse((xgb_r2 - gam_r2) >= 0.03, "XGBoost", "GAM"), " model for vertical approach angle (XGBoost must be at least 3% better)\n")
   }
   
   # Choose the better model for vertical approach angle
-  if (xgb_r2 > gam_r2) {
+  if ((xgb_r2 - gam_r2) >= 0.03) {
     vaa_model <- vaa_xgb
     vaa_model_type <- "XGBoost"
     if (verbose) {
@@ -478,7 +493,8 @@ train_pitch_normalization_fb <- function(pitch_data, pitch_type, verbose = FALSE
     trControl = train_control,
     tuneGrid = tune_grid,
     metric = "RMSE",
-    verbosity = 0
+    verbosity = 0,
+    nthread = 1
   )
   
   if (verbose) {
@@ -488,8 +504,7 @@ train_pitch_normalization_fb <- function(pitch_data, pitch_type, verbose = FALSE
   }
   
   # Generate model comparison tables
-  vaa_comparison <- print_model_comparison(vaa_xgb, paste(pitch_type, "Vertical Approach Angle"), top_n = 10)
-  haa_comparison <- print_model_comparison(haa_xgb, paste(pitch_type, "Horizontal Approach Angle"), top_n = 10)
+  invisible(haa_comparison <- print_model_comparison(haa_xgb, paste(pitch_type, "Horizontal Approach Angle"), top_n = 10, print_output = FALSE))
   
   # Generate predictions
   if (verbose) cat("Generating predictions and creating normalized variables...\n")
@@ -648,23 +663,31 @@ train_pitch_normalization_breaking_balls <- function(pitch_data, pitch_type, ver
     trControl = train_control,
     tuneGrid = tune_grid,
     metric = "RMSE",
-    verbosity = 0
+    verbosity = 0,
+    nthread = 1
   )
   
   # Compare R-squared values
   gam_r2 <- summary(vaa_gam)$r.sq
   xgb_r2 <- vaa_xgb$results$Rsquared[1]  # Get R-squared from CV results
   
+  # Always print GAM summary and XGBoost model comparison table
+  cat("\nGAM Model Summary (Vertical Approach Angle):\n")
+  print(summary(vaa_gam))
+  plot(vaa_gam)
+  invisible(vaa_comparison <- print_model_comparison(vaa_xgb, paste(pitch_type, "Vertical Approach Angle"), top_n = 10, print_output = TRUE))
+
+  # If verbose, print additional details
   if (verbose) {
     cat("Model Comparison for Vertical Approach Angle:\n")
     cat("GAM R-squared:", round(gam_r2, 4), "\n")
     cat("XGBoost R-squared:", round(xgb_r2, 4), "\n")
     cat("Best XGBoost parameters:", paste(names(vaa_xgb$bestTune), vaa_xgb$bestTune, collapse = ", "), "\n")
-    cat("Using", ifelse(xgb_r2 > gam_r2, "XGBoost", "GAM"), "model for vertical approach angle\n")
+    cat("Using ", ifelse((xgb_r2 - gam_r2) >= 0.03, "XGBoost", "GAM"), " model for vertical approach angle (XGBoost must be at least 3% better)\n")
   }
   
   # Choose the better model for vertical approach angle
-  if (xgb_r2 > gam_r2) {
+  if ((xgb_r2 - gam_r2) >= 0.03) {
     vaa_model <- vaa_xgb
     vaa_model_type <- "XGBoost"
     if (verbose) {
@@ -695,7 +718,8 @@ train_pitch_normalization_breaking_balls <- function(pitch_data, pitch_type, ver
       trControl = train_control,
       tuneGrid = tune_grid,
       metric = "RMSE",
-      verbosity = 0
+      verbosity = 0,
+      nthread = 1
     )
     if (verbose) {
       cat("Left-handed XGBoost Model Summary:\n")
@@ -715,7 +739,8 @@ train_pitch_normalization_breaking_balls <- function(pitch_data, pitch_type, ver
       trControl = train_control,
       tuneGrid = tune_grid,
       metric = "RMSE",
-      verbosity = 0
+      verbosity = 0,
+      nthread = 1
     )
     if (verbose) {
       cat("Right-handed XGBoost Model Summary:\n")
@@ -725,17 +750,14 @@ train_pitch_normalization_breaking_balls <- function(pitch_data, pitch_type, ver
   }
   
   # Generate model comparison tables
-  vaa_comparison <- print_model_comparison(vaa_xgb, paste(pitch_type, "Vertical Approach Angle"), top_n = 10)
-  
+  invisible(vaa_comparison <- print_model_comparison(vaa_xgb, paste(pitch_type, "Vertical Approach Angle"), top_n = 10, print_output = FALSE))
   model_comparisons <- list(vaa_comparison = vaa_comparison)
-  
   if (!is.null(xgb_model_lefty)) {
-    lefty_comparison <- print_model_comparison(xgb_model_lefty, paste(pitch_type, "Left-handed Horizontal"), top_n = 10)
+    invisible(lefty_comparison <- print_model_comparison(xgb_model_lefty, paste(pitch_type, "Left-handed Horizontal"), top_n = 10, print_output = FALSE))
     model_comparisons$lefty_comparison <- lefty_comparison
   }
-  
   if (!is.null(xgb_model_righty)) {
-    righty_comparison <- print_model_comparison(xgb_model_righty, paste(pitch_type, "Right-handed Horizontal"), top_n = 10)
+    invisible(righty_comparison <- print_model_comparison(xgb_model_righty, paste(pitch_type, "Right-handed Horizontal"), top_n = 10, print_output = FALSE))
     model_comparisons$righty_comparison <- righty_comparison
   }
   
@@ -852,45 +874,45 @@ plot_approach_angles(chg_angles, main_chg, "Changeup")
 # Uncomment this section to test the code quickly
 # This runs only 2-3 models per pitch type for quick validation
 
-Test Fastball Normalization (2-3 models, ~5-10 minutes)
+# Test Fastball Normalization (2-3 models, ~5-10 minutes)
 fb_test <- train_pitch_normalization_fb(
   main_fb,
   "Fastball",
   verbose = FALSE,
   grid_type = "test",
-  cv_folds = 3,
+  cv_folds = 3,   # reduce folds for speed
   parallel = TRUE
 )
 
-# Test Slider Normalization (2-3 models, ~5-10 minutes)
-sl_test <- train_pitch_normalization_breaking_balls(
-  main_sl,
-  "Slider",
-  verbose = FALSE,
-  grid_type = "test",
-  cv_folds = 3,
-  parallel = TRUE
-)
-
-# Test Curveball Normalization (2-3 models, ~5-10 minutes)
-cv_test <- train_pitch_normalization_breaking_balls(
-  main_cv,
-  "Curveball",
-  verbose = FALSE,
-  grid_type = "test",
-  cv_folds = 3,
-  parallel = TRUE
-)
-
-# Test Changeup Normalization (2-3 models, ~5-10 minutes)
-chg_test <- train_pitch_normalization_breaking_balls(
-  main_chg,
-  "Changeup",
-  verbose = FALSE,
-  grid_type = "test",
-  cv_folds = 3,
-  parallel = TRUE
-)
+# # Test Slider Normalization (2-3 models, ~5-10 minutes)
+# sl_test <- train_pitch_normalization_breaking_balls(
+#   main_sl,
+#   "Slider",
+#   verbose = FALSE,
+#   grid_type = "test",
+#   cv_folds = 2,
+#   parallel = TRUE
+# )
+# 
+# # Test Curveball Normalization (2-3 models, ~5-10 minutes)
+# cv_test <- train_pitch_normalization_breaking_balls(
+#   main_cv,
+#   "Curveball",
+#   verbose = FALSE,
+#   grid_type = "test",
+#   cv_folds = 2,
+#   parallel = TRUE
+# )
+# 
+# # Test Changeup Normalization (2-3 models, ~5-10 minutes)
+# chg_test <- train_pitch_normalization_breaking_balls(
+#   main_chg,
+#   "Changeup",
+#   verbose = FALSE,
+#   grid_type = "test",
+#   cv_folds = 2,
+#   parallel = TRUE
+# )
 
 cat("Test mode completed! If everything works, you can run the full pipeline.\n")
 ```
@@ -903,7 +925,7 @@ fb_results <- train_pitch_normalization_fb(
   main_fb, 
   "Fastball", 
   verbose = FALSE, 
-  grid_type = "balanced", 
+  grid_type = "colab_4hr", 
   cv_folds = 5, 
   parallel = TRUE
 )
@@ -918,7 +940,7 @@ sl_results <- train_pitch_normalization_breaking_balls(
   main_sl, 
   "Slider", 
   verbose = FALSE, 
-  grid_type = "balanced", 
+  grid_type = "colab_4hr", 
   cv_folds = 5, 
   parallel = TRUE
 )
@@ -933,7 +955,7 @@ cv_results <- train_pitch_normalization_breaking_balls(
   main_cv, 
   "Curveball", 
   verbose = FALSE, 
-  grid_type = "balanced", 
+  grid_type = "colab_4hr", 
   cv_folds = 5, 
   parallel = TRUE
 )
@@ -948,7 +970,7 @@ chg_results <- train_pitch_normalization_breaking_balls(
   main_chg, 
   "Changeup", 
   verbose = FALSE, 
-  grid_type = "balanced", 
+  grid_type = "colab_4hr", 
   cv_folds = 5, 
   parallel = TRUE
 )
@@ -967,14 +989,8 @@ cat("All datasets have been saved with normalizations applied.\n")
 ```
 
 # Cleanup Parallel Computing
-```{r cleanup, include=FALSE}
-# Stop parallel cluster
+```
 if (exists("cl")) {
   stopCluster(cl)
   cat("Parallel cluster stopped.\n")
 }
-
-# Unregister parallel backend
-unregisterDoParallel()
-cat("Parallel computing cleanup complete.\n")
-```
